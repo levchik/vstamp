@@ -1,4 +1,4 @@
-use crate::{Connection, Frame, Replica};
+use crate::{Connection, Frame, GuardedReplica, Replica};
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use tracing::instrument;
@@ -30,7 +30,7 @@ impl Reply {
     #[instrument(skip(self, replica, dst))]
     pub(crate) async fn apply(
         &self,
-        replica: &Arc<Mutex<Replica>>,
+        replica: &GuardedReplica,
         dst: &mut Connection,
     ) -> crate::Result<()> {
         // send the request to the other replicas

@@ -1,6 +1,6 @@
 use std::ops::Deref;
 use crate::commands::Reply;
-use crate::{Connection, Frame, Replica};
+use crate::{Connection, Frame, GuardedReplica, Replica};
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, instrument};
@@ -27,7 +27,7 @@ impl Request {
         Frame::Request(self)
     }
 
-    fn get_stored_reply(&self, replica: &Arc<Mutex<Replica>>) -> Option<Frame> {
+    fn get_stored_reply(&self, replica: &GuardedReplica) -> Option<Frame> {
         let mut replica = replica.clone();
         let x = replica.lock().unwrap()
             .state
@@ -39,7 +39,7 @@ impl Request {
     #[instrument(skip(self, replica, dst))]
     pub(crate) async fn apply(
         &self,
-        replica: &Arc<Mutex<Replica>>,
+        replica: &GuardedReplica,
         dst: &mut Connection,
     ) -> crate::Result<()> {
         /*

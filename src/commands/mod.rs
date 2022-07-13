@@ -3,7 +3,7 @@ pub use reply::Reply;
 mod request;
 pub use request::Request;
 mod unknown;
-use crate::{Connection, Frame, Replica};
+use crate::{Connection, Frame, GuardedReplica, Replica};
 use std::sync::{Arc, Mutex};
 pub use unknown::Unknown;
 
@@ -46,7 +46,7 @@ impl Command {
     /// to execute a received command.
     pub(crate) async fn apply(
         self,
-        replica: &Arc<Mutex<Replica>>,
+        replica: &GuardedReplica,
         dst: &mut Connection,
     ) -> crate::Result<()> {
         use Command::*;

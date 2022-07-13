@@ -1,4 +1,4 @@
-use crate::{Command, Connection, Replica, Shutdown};
+use crate::{Command, Connection, GuardedReplica, Replica, Shutdown};
 
 use crate::replica::ReplicaConfig;
 use std::future::Future;
@@ -14,7 +14,7 @@ use tracing::{error, info, instrument};
 struct Listener {
     /// This is a wrapper around an `Arc`. This enables to be cloned and
     /// passed into the per connection state (`Handler`).
-    replica: Arc<Mutex<Replica>>,
+    replica: GuardedReplica,
 
     /// TCP listener supplied by the `run` caller.
     listener: TcpListener,
@@ -58,7 +58,7 @@ struct Listener {
 /// Per-connection handler
 #[derive(Debug)]
 struct Handler {
-    replica: Arc<Mutex<Replica>>,
+    replica: GuardedReplica,
 
     /// The TCP connection decorated with the redis protocol encoder / decoder
     /// implemented using a buffered `TcpStream`.
