@@ -1,8 +1,6 @@
-use std::ops::Deref;
 use crate::commands::Reply;
-use crate::{Connection, Frame, GuardedReplica, Replica};
+use crate::{Connection, Frame, GuardedReplica};
 use bytes::Bytes;
-use std::sync::{Arc, Mutex};
 use tracing::{debug, instrument};
 
 #[derive(Debug, Clone)]
@@ -28,8 +26,9 @@ impl Request {
     }
 
     fn get_stored_reply(&self, replica: &GuardedReplica) -> Option<Frame> {
-        let mut replica = replica.clone();
-        let x = replica.lock().unwrap()
+        let x = replica
+            .lock()
+            .unwrap()
             .state
             .client_table
             .get_reply_frame(&self.client_id, &self.request_id);

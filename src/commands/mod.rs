@@ -3,8 +3,7 @@ pub use reply::Reply;
 mod request;
 pub use request::Request;
 mod unknown;
-use crate::{Connection, Frame, GuardedReplica, Replica};
-use std::sync::{Arc, Mutex};
+use crate::{Connection, Frame, GuardedReplica};
 pub use unknown::Unknown;
 
 /// Enumeration of supported commands.

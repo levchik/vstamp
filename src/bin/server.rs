@@ -29,9 +29,9 @@ async fn main() -> vstamp::Result<()> {
     let listener = TcpListener::bind(&default_address).await?;
 
     let replica_config = ReplicaConfig {
-        listen_address: default_address,
+        listen_address: default_address.clone(),
         replicas_addresses: vec![
-            "127.0.0.1:4627".to_string(),
+            default_address.clone(),
             "127.0.0.1:4628".to_string(),
             "127.0.0.1:4629".to_string(),
         ],

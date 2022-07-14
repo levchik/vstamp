@@ -31,7 +31,7 @@ impl ClientTable {
             Some(Frame::Reply(maybe_reply.unwrap().clone()))
         } else {
             None
-        }
+        };
     }
 }
 

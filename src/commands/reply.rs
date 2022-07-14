@@ -1,6 +1,5 @@
-use crate::{Connection, Frame, GuardedReplica, Replica};
+use crate::{Connection, Frame, GuardedReplica};
 use bytes::Bytes;
-use std::sync::{Arc, Mutex};
 use tracing::instrument;
 
 #[derive(Debug, Clone)]
