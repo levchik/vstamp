@@ -1,5 +1,6 @@
-use crate::backup::ManagerCommand;
+use crate::app::GuardedKVApp;
 use crate::commands::{Prepare, Reply};
+use crate::manager::ManagerCommand;
 use crate::{Connection, Frame, Replica};
 use bytes::Bytes;
 use tokio::sync::mpsc::Sender;
@@ -26,13 +27,23 @@ impl Request {
         Frame::Request(self)
     }
 
-    #[instrument(skip(self, replica, dst))]
+    #[instrument(skip(self, replica, dst, app))]
     pub(crate) async fn apply(
         &self,
         replica: &Replica,
         dst: &mut Connection,
         backups_sender: &Sender<ManagerCommand>,
+        app: &GuardedKVApp,
     ) -> crate::Result<()> {
+        /*
+        Replicas participate in processing of client requests only when their status is normal.
+        This constraint is critical for correctness!
+        */
+        if replica.ensure_normal_status().is_err() {
+            // Drop request to tell client, that it needs to either try later or find new leader
+            return Ok(());
+        }
+
         /*
         When the primary receives the request, it compares the request-number in the request
         with the information in the client table.
@@ -41,7 +52,6 @@ impl Request {
         but it will re-send the response if the request is the most recent one from this client
         and it has already been executed.
         */
-
         // TODO: check if we are primary now?
 
         let maybe_stored_reply = replica
@@ -88,30 +98,46 @@ impl Request {
                     // It completes future only after quota of PREPAREOK messages are received.
                     let res = resp_rx.await;
                     debug!("GOT (Prepare) = {:?}", res);
-                    // Ok(Some(res??));
+                    match res {
+                        Ok(_) => {
+                            // Then, after it has executed all earlier operations
+                            // (those assigned smaller op-numbers), the primary
+                            // executes the operation by making an up-call to the
+                            // service code, and increments its commit-number.
 
-                    // Then, after it has executed all earlier operations
-                    // (those assigned smaller op-numbers), the primary
-                    // executes the operation by making an up-call to the
-                    // service code, and increments its commit-number.
-                    // TODO
+                            // NOTE: Advancing the commit-num must be done in strict order,
+                            //       and it means that all previous operations have been committed.
+                            let response = app.lock().unwrap().apply(
+                                self.operation.clone()
+                            );
+                            replica.advance_commit_number();
 
-                    // Then it sends a REPLY message to the client.
-                    let reply = Reply::new(
-                        self.client_id,
-                        self.request_id,
-                        self.operation.clone(),
-                    );
-                    debug!(?reply);
-                    dst.write_frame(&reply.clone().into_frame()).await?;
-                    // The primary also updates the client’s
-                    // entry in the client-table to contain the result.
-                    replica.update_client_table(
-                        &self.client_id,
-                        &self.request_id,
-                        &reply,
-                    );
-                    Ok(())
+                            // Then it sends a REPLY message to the client.
+                            let reply = Reply::new(
+                                // TODO: can we use view_number calculated before?
+                                replica.get_view_number(),
+                                self.request_id,
+                                response,
+                            );
+                            debug!(?reply);
+                            dst.write_frame(&reply.clone().into_frame())
+                                .await?;
+
+                            // The primary also updates the client’s
+                            // entry in the client-table to contain the result.
+                            replica.update_client_table(
+                                &self.client_id,
+                                &self.request_id,
+                                &reply,
+                            );
+                            Ok(())
+                        }
+                        Err(_) => {
+                            // If the primary didn’t receive enough PREPAREOK messages,
+                            // it drops the request and re-sends the response.
+                            Ok(())
+                        }
+                    }
                 }
                 Some(reply) => {
                     debug!("Sending stored reply");

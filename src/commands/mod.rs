@@ -2,6 +2,8 @@ mod reply;
 
 pub use reply::Reply;
 use tokio::sync::mpsc::Sender;
+use tracing::debug;
+
 mod request;
 pub use request::Request;
 mod prepare;
@@ -9,9 +11,11 @@ pub use prepare::Prepare;
 mod prepareok;
 pub use prepareok::PrepareOk;
 mod unknown;
-use crate::backup::ManagerCommand;
-use crate::{Connection, Frame, Replica};
 pub use unknown::Unknown;
+
+use crate::app::GuardedKVApp;
+use crate::manager::ManagerCommand;
+use crate::{Connection, Frame, Replica};
 
 /// Enumeration of supported commands.
 ///
@@ -22,6 +26,7 @@ pub enum Command {
     Reply(Reply),
     Prepare(Prepare),
     PrepareOk(PrepareOk),
+    Unknown(Unknown),
 }
 
 impl Command {
@@ -58,18 +63,16 @@ impl Command {
         replica: &Replica,
         dst: &mut Connection,
         backups_sender: &Sender<ManagerCommand>,
+        app: &GuardedKVApp,
     ) -> crate::Result<()> {
         use Command::*;
 
         match self {
-            Request(cmd) => cmd.apply(replica, dst, backups_sender).await,
+            Request(cmd) => cmd.apply(replica, dst, backups_sender, app).await,
             Reply(cmd) => cmd.apply(replica, dst).await,
             Prepare(cmd) => cmd.apply(replica, dst).await,
             PrepareOk(cmd) => cmd.apply(replica, dst).await,
-            // Unknown(cmd) => cmd.apply(dst).await,
-            // `Unsubscribe` cannot be applied. It may only be received from the
-            // context of a `Subscribe` command.
-            // Unsubscribe(_) => Err("`Unsubscribe` is unsupported in this context".into()),
+            Unknown(cmd) => cmd.apply(dst).await,
         }
     }
 }

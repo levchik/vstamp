@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::time::sleep;
 use tracing::debug;
-use vstamp::{client, server, ReplicaConfig};
+use vstamp::{client, server, ReplicaConfig, KVApp};
 
 static TRACING: Lazy<()> = Lazy::new(|| {
     let subscriber = tracing_subscriber::fmt()
@@ -41,8 +41,8 @@ async fn spawn_servers(n: usize, delay: u64) -> Vec<String> {
             listen_address,
             replicas_addresses: replicas_addresses.clone(),
         };
-
-        tokio::spawn(server::run(replica_config, listener, signal::ctrl_c()));
+        let app = KVApp::new();
+        tokio::spawn(server::run(app, replica_config, listener, signal::ctrl_c()));
     }
 
     debug!("Wait {} seconds for sync...", delay);
@@ -53,19 +53,32 @@ async fn spawn_servers(n: usize, delay: u64) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn server_sends_stored_reply_if_latest_request_came_as_duplicate() {
+async fn server_saves_app_state_between_client_calls() {
     let replicas_addresses = spawn_servers(3, 1).await;
     let addr = replicas_addresses[0].clone();
-    let mut client = client::connect(&addr).await.unwrap();
-    let op = Bytes::from_static("foo".as_ref());
+    let client_id = 777;
+    let mut client = client::connect(&addr, client_id).await.unwrap();
 
-    let val = client.request(op.clone()).await.unwrap();
+    let set_op = Bytes::from_static("S KEY VALUE 0".as_ref());
+    let val = client.request(set_op.clone()).await.unwrap();
     assert_eq!(val.view_number, 0);
-    assert_eq!(val.request_id, 0);
-    assert_eq!(val.response, op);
+    assert_eq!(val.request_id, 1);
+    assert_eq!(val.response, Bytes::from_static("VALUE".as_ref()));
 
-    let val = client.request(op.clone()).await.unwrap();
+    let get_op = Bytes::from_static("G KEY".as_ref());
+    let val = client.request(get_op.clone()).await.unwrap();
     assert_eq!(val.view_number, 0);
-    assert_eq!(val.request_id, 0);
-    assert_eq!(val.response, op);
+    assert_eq!(val.request_id, 2);
+    assert_eq!(val.response, Bytes::from_static("VALUE".as_ref()));
+
+    let delete_op = Bytes::from_static("D KEY 0".as_ref());
+    let val = client.request(delete_op.clone()).await.unwrap();
+    assert_eq!(val.view_number, 0);
+    assert_eq!(val.request_id, 3);
+    assert_eq!(val.response, Bytes::from_static("".as_ref()));
+
+    let val = client.request(get_op.clone()).await.unwrap();
+    assert_eq!(val.view_number, 0);
+    assert_eq!(val.request_id, 4);
+    assert_eq!(val.response, Bytes::from_static("".as_ref()));
 }

@@ -1,9 +1,10 @@
 use crate::{Command, Connection, Replica, Shutdown};
 
-use crate::backup::{BackupsManager, ManagerCommand};
+use crate::app::{GuardedKVApp, KVApp};
+use crate::manager::{ManagerCommand, ReplicaManager};
 use crate::replica::{ReplicaConfig, ReplicaDropGuard};
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
@@ -13,12 +14,13 @@ use tracing::{error, info, instrument};
 /// which performs the TCP listening and initialization of per-connection state.
 #[derive(Debug)]
 struct Listener {
+    app: GuardedKVApp,
     /// This is a wrapper around an `Arc`. This enables to be cloned and
     /// passed into the per connection state (`Handler`).
     replica_holder: ReplicaDropGuard,
 
     /// This is a single point of entry for communication between the replicas.
-    backups_manager: BackupsManager,
+    backups_manager: ReplicaManager,
 
     /// TCP listener supplied by the `run` caller.
     listener: TcpListener,
@@ -63,9 +65,9 @@ struct Listener {
 #[derive(Debug)]
 struct Handler {
     replica: Replica,
-
+    app: GuardedKVApp,
     /// Single mpsc channel will be created on initialization. It is used to
-    /// send messages to BackupsManager that handles all replica-to-replica communication.
+    /// send messages to ReplicaManager that handles all replica-to-replica communication.
     backups_manager_mpsc_tx: mpsc::Sender<ManagerCommand>,
 
     /// The TCP connection decorated with the protocol encoder / decoder
@@ -117,6 +119,7 @@ const MAX_CONNECTIONS: usize = 250;
 /// `tokio::signal::ctrl_c()` can be used as the `shutdown` argument. This will
 /// listen for a SIGINT signal.
 pub async fn run(
+    app: KVApp,
     replica_config: ReplicaConfig,
     listener: TcpListener,
     shutdown: impl Future,
@@ -134,9 +137,10 @@ pub async fn run(
     // Initialize the listener state
     let mut server = Listener {
         listener,
+        app: Arc::new(Mutex::new(app)),
         replica_holder: ReplicaDropGuard::new(replica_config),
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-        backups_manager: BackupsManager::new(backup_addresses),
+        backups_manager: ReplicaManager::new(backup_addresses),
         notify_shutdown,
         shutdown_complete_tx,
         shutdown_complete_rx,
@@ -146,21 +150,6 @@ pub async fn run(
     // server task runs until an error is encountered, so under normal
     // circumstances, this `select!` statement runs until the `shutdown` signal
     // is received.
-    //
-    // `select!` statements are written in the form of:
-    //
-    // ```
-    // <result of async op> = <async op> => <step to perform with result>
-    // ```
-    //
-    // All `<async op>` statements are executed concurrently. Once the **first**
-    // op completes, its associated `<step to perform with result>` is
-    // performed.
-    //
-    // The `select! macro is a foundational building block for writing
-    // asynchronous Rust. See the API docs for more details:
-    //
-    // https://docs.rs/tokio/*/tokio/macro.select.html
     tokio::select! {
         res = server.run() => {
             // If an error is received here, accepting connections from the TCP
@@ -174,7 +163,6 @@ pub async fn run(
             }
         }
         _ = shutdown => {
-            // The shutdown signal has been received.
             info!("shutting down");
         }
     }
@@ -244,8 +232,8 @@ impl Listener {
 
             // Create the necessary per-connection handler state.
             let mut handler = Handler {
-                // Get a handle to the shared database. Internally, this is an
-                // `Arc`, so a clone only increments the ref count.
+                // Internally, these are `Arc`, so a clone only increments the ref count.
+                app: self.app.clone(),
                 replica: self.replica_holder.replica(),
 
                 // Use another mpsc to send a message to the
@@ -375,6 +363,7 @@ impl Handler {
                 &self.replica,
                 &mut self.connection,
                 &self.backups_manager_mpsc_tx,
+                &self.app,
             )
             .await?;
         }

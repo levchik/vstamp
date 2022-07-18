@@ -1,7 +1,7 @@
 use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::info;
-use vstamp::{server, ReplicaConfig};
+use vstamp::{server, ReplicaConfig, KVApp};
 
 #[tokio::main]
 async fn main() -> vstamp::Result<()> {
@@ -36,6 +36,8 @@ async fn main() -> vstamp::Result<()> {
             "127.0.0.1:4629".to_string(),
         ],
     };
+    info!("Creating app...");
+    let app = KVApp::new();
     info!("Starting replica...");
-    server::run(replica_config, listener, signal::ctrl_c()).await
+    server::run(app, replica_config, listener, signal::ctrl_c()).await
 }

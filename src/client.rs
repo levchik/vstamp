@@ -23,6 +23,8 @@ pub struct Client {
     /// `Connection` allows the handler to operate at the "frame" level and keep
     /// the byte level protocol parsing details encapsulated in `Connection`.
     connection: Connection,
+    id: u128,
+    request_id: u128
 }
 
 /// Establish a connection with the server located at `addr`.
@@ -38,7 +40,7 @@ pub struct Client {
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let client = match client::connect("127.0.0.1:4627").await {
+///     let client = match client::connect("127.0.0.1:4627", 1).await {
 ///         Ok(client) => client,
 ///         Err(_) => panic!("failed to establish connection"),
 ///     };
@@ -46,7 +48,7 @@ pub struct Client {
 /// }
 /// ```
 ///
-pub async fn connect<T: ToSocketAddrs>(addr: T) -> crate::Result<Client> {
+pub async fn connect<T: ToSocketAddrs>(addr: T, client_id: u128) -> crate::Result<Client> {
     // The `addr` argument is passed directly to `TcpStream::connect`. This
     // performs any asynchronous DNS lookup and attempts to establish the TCP
     // connection. An error at either step returns an error, which is then
@@ -57,7 +59,11 @@ pub async fn connect<T: ToSocketAddrs>(addr: T) -> crate::Result<Client> {
     // perform protocol frame parsing.
     let connection = Connection::new(socket);
 
-    Ok(Client { connection })
+    Ok(Client {
+        connection,
+        id: client_id,
+        request_id: 0
+    })
 }
 
 impl Client {
@@ -73,7 +79,7 @@ impl Client {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let mut client = client::connect("127.0.0.1:4627").await.unwrap();
+    ///     let mut client = client::connect("127.0.0.1:4627", 1).await.unwrap();
     ///
     ///     let val = client.request(Bytes::from_static("foo".as_ref())).await.unwrap();
     ///     println!("Got = {:?}", val);
@@ -81,7 +87,8 @@ impl Client {
     /// ```
     #[instrument(skip(self))]
     pub async fn request(&mut self, op: Bytes) -> crate::Result<Reply> {
-        let frame = Request::new(0, 0, op).into_frame();
+        self.request_id += 1;
+        let frame = Request::new(self.id, self.request_id, op).into_frame();
 
         debug!(request = ?frame);
 

@@ -1,3 +1,4 @@
+extern crate core;
 pub mod client;
 pub mod commands;
 pub use commands::Command;
@@ -9,7 +10,9 @@ pub mod replica;
 pub use replica::{Replica, ReplicaConfig};
 mod shutdown;
 use shutdown::Shutdown;
-mod backup;
+mod app;
+pub use app::KVApp;
+mod manager;
 pub mod server;
 
 /// Error returned by most functions.

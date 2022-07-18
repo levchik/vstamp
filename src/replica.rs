@@ -6,8 +6,38 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
+pub enum ReplicaError {
+    ViewNumberBehind,
+    ViewNumberAhead,
+    OpNumberBehind,
+    OpNumberAhead,
+}
+
+impl Error for ReplicaError {}
+
+impl fmt::Display for ReplicaError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ReplicaError::ViewNumberBehind => {
+                "View number in request is behind current view of this replica".fmt(fmt)
+            }
+            ReplicaError::ViewNumberAhead => {
+                "View number in request is ahead of current view of this replica".fmt(fmt)
+            }
+            ReplicaError::OpNumberBehind => {
+                "Op number in request is behind current log of this replica".fmt(fmt)
+            }
+            ReplicaError::OpNumberAhead => {
+                "Op number in request is ahead of current log of this replica".fmt(fmt)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ClientError {
     StaleRequestId,
+    NotNormalStatus,
     Other(crate::Error),
 }
 
@@ -30,6 +60,9 @@ impl fmt::Display for ClientError {
         match self {
             ClientError::StaleRequestId => {
                 "Stale request_id in client message".fmt(fmt)
+            }
+            ClientError::NotNormalStatus => {
+                "Not normal status for replica".fmt(fmt)
             }
             ClientError::Other(err) => err.fmt(fmt),
         }
@@ -163,7 +196,7 @@ impl ClientTable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum ReplicaStatus {
     Normal,
     ViewChange,
@@ -196,6 +229,11 @@ impl ReplicaState {
     pub fn advance_op_number(&mut self) -> u128 {
         self.op_number += 1;
         self.op_number
+    }
+
+    pub fn advance_commit_number(&mut self) -> u128 {
+        self.commit_number += 1;
+        self.commit_number
     }
 }
 
@@ -277,6 +315,11 @@ impl Replica {
         info.state.advance_op_number()
     }
 
+    pub fn advance_commit_number(&self) -> u128 {
+        let mut info = self.info.lock().unwrap();
+        info.state.advance_commit_number()
+    }
+
     pub fn get_current_replica_number(&self) -> u8 {
         let info = self.info.lock().unwrap();
         info.state.replica_number
@@ -285,6 +328,44 @@ impl Replica {
     pub fn append_to_log(&self, operation: Bytes) {
         let mut info = self.info.lock().unwrap();
         info.state.log.append(operation)
+    }
+
+    pub fn ensure_normal_status(&self) -> Result<(), ClientError> {
+        let info = self.info.lock().unwrap();
+        if info.status != ReplicaStatus::Normal {
+            Err(ClientError::NotNormalStatus)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn ensure_same_view(
+        &self,
+        view_number: u128,
+    ) -> Result<(), ReplicaError> {
+        let info = self.info.lock().unwrap();
+        if info.state.view_number > view_number {
+            Err(ReplicaError::ViewNumberBehind)
+        } else if info.state.view_number < view_number {
+            Err(ReplicaError::ViewNumberAhead)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn ensure_consecutive_op_number(
+        &self,
+        op_number: u128,
+    ) -> Result<(), ReplicaError> {
+        let info = self.info.lock().unwrap();
+        let target_last_op_number = op_number - 1;
+        if info.state.op_number > target_last_op_number {
+            Err(ReplicaError::OpNumberBehind)
+        } else if info.state.op_number < target_last_op_number {
+            Err(ReplicaError::OpNumberAhead)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn check_for_existing_reply(
