@@ -1,20 +1,23 @@
 use crate::{Connection, Frame, Replica};
-use bytes::Bytes;
 use tracing::instrument;
 
 #[derive(Debug, Clone)]
-pub struct Reply {
-    pub view_number: u128,
-    pub request_id: u128,
-    pub response: Bytes,
+pub struct PrepareOk {
+    pub(crate) view_number: u128,
+    pub(crate) op_number: u128,
+    pub(crate) replica_number: u8,
 }
 
-impl Reply {
-    pub fn new(view_number: u128, request_id: u128, response: Bytes) -> Self {
+impl PrepareOk {
+    pub fn new(
+        view_number: u128,
+        op_number: u128,
+        replica_number: u8,
+    ) -> Self {
         Self {
             view_number,
-            request_id,
-            response,
+            op_number,
+            replica_number,
         }
     }
 
@@ -23,7 +26,7 @@ impl Reply {
     /// This is called by the client when encoding a `Reply` command to send to
     /// the server.
     pub(crate) fn into_frame(self) -> Frame {
-        Frame::Reply(self)
+        Frame::PrepareOk(self)
     }
 
     #[instrument(skip(self, replica, dst))]
@@ -32,8 +35,6 @@ impl Reply {
         replica: &Replica,
         dst: &mut Connection,
     ) -> crate::Result<()> {
-        // send the request to the other replicas
-        // let response = replica.process_cmd(self.clone()).await;
         Ok(())
     }
 }

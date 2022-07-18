@@ -1,9 +1,16 @@
 mod reply;
+
 pub use reply::Reply;
+use tokio::sync::mpsc::Sender;
 mod request;
 pub use request::Request;
+mod prepare;
+pub use prepare::Prepare;
+mod prepareok;
+pub use prepareok::PrepareOk;
 mod unknown;
-use crate::{Connection, Frame, GuardedReplica};
+use crate::backup::ManagerCommand;
+use crate::{Connection, Frame, Replica};
 pub use unknown::Unknown;
 
 /// Enumeration of supported commands.
@@ -13,13 +20,14 @@ pub use unknown::Unknown;
 pub enum Command {
     Request(Request),
     Reply(Reply),
+    Prepare(Prepare),
+    PrepareOk(PrepareOk),
 }
 
 impl Command {
     /// Parse a command from a received frame.
     ///
-    /// The `Frame` must represent a Redis command supported by `mini-redis` and
-    /// be the array variant.
+    /// The `Frame` must represent a command supported by `vstamp`
     ///
     /// # Returns
     ///
@@ -30,6 +38,8 @@ impl Command {
         let cmd = match frame {
             Frame::Request(request) => Ok(Command::Request(request)),
             Frame::Reply(reply) => Ok(Command::Reply(reply)),
+            Frame::Prepare(prepare) => Ok(Command::Prepare(prepare)),
+            Frame::PrepareOk(prepare_ok) => Ok(Command::PrepareOk(prepare_ok)),
             // _ => Err(crate::Error::Protocol("invalid command".into())),
             _ => Err("invalid command"),
         }
@@ -45,14 +55,17 @@ impl Command {
     /// to execute a received command.
     pub(crate) async fn apply(
         self,
-        replica: &GuardedReplica,
+        replica: &Replica,
         dst: &mut Connection,
+        backups_sender: &Sender<ManagerCommand>,
     ) -> crate::Result<()> {
         use Command::*;
 
         match self {
-            Request(cmd) => cmd.apply(replica, dst).await,
+            Request(cmd) => cmd.apply(replica, dst, backups_sender).await,
             Reply(cmd) => cmd.apply(replica, dst).await,
+            Prepare(cmd) => cmd.apply(replica, dst).await,
+            PrepareOk(cmd) => cmd.apply(replica, dst).await,
             // Unknown(cmd) => cmd.apply(dst).await,
             // `Unsubscribe` cannot be applied. It may only be received from the
             // context of a `Subscribe` command.

@@ -1,8 +1,9 @@
-use crate::{Command, Connection, GuardedReplica, Replica, Shutdown};
+use crate::{Command, Connection, Replica, Shutdown};
 
-use crate::replica::ReplicaConfig;
+use crate::backup::{BackupsManager, ManagerCommand};
+use crate::replica::{ReplicaConfig, ReplicaDropGuard};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
@@ -14,7 +15,10 @@ use tracing::{error, info, instrument};
 struct Listener {
     /// This is a wrapper around an `Arc`. This enables to be cloned and
     /// passed into the per connection state (`Handler`).
-    replica: GuardedReplica,
+    replica_holder: ReplicaDropGuard,
+
+    /// This is a single point of entry for communication between the replicas.
+    backups_manager: BackupsManager,
 
     /// TCP listener supplied by the `run` caller.
     listener: TcpListener,
@@ -58,9 +62,13 @@ struct Listener {
 /// Per-connection handler
 #[derive(Debug)]
 struct Handler {
-    replica: GuardedReplica,
+    replica: Replica,
 
-    /// The TCP connection decorated with the redis protocol encoder / decoder
+    /// Single mpsc channel will be created on initialization. It is used to
+    /// send messages to BackupsManager that handles all replica-to-replica communication.
+    backups_manager_mpsc_tx: mpsc::Sender<ManagerCommand>,
+
+    /// The TCP connection decorated with the protocol encoder / decoder
     /// implemented using a buffered `TcpStream`.
     ///
     /// When `Listener` receives an inbound connection, the `TcpStream` is
@@ -90,7 +98,7 @@ struct Handler {
     _shutdown_complete: mpsc::Sender<()>,
 }
 
-/// Maximum number of concurrent connections the redis server will accept.
+/// Maximum number of concurrent connections the server will accept.
 ///
 /// When this limit is reached, the server will stop accepting connections until
 /// an active connection terminates.
@@ -121,11 +129,14 @@ pub async fn run(
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
 
+    let backup_addresses = replica_config.get_backup_addresses();
+
     // Initialize the listener state
     let mut server = Listener {
         listener,
-        replica: Arc::new(Mutex::new(Replica::new(replica_config))),
+        replica_holder: ReplicaDropGuard::new(replica_config),
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        backups_manager: BackupsManager::new(backup_addresses),
         notify_shutdown,
         shutdown_complete_tx,
         shutdown_complete_rx,
@@ -189,6 +200,8 @@ pub async fn run(
     // the `mpsc` channel will close and `recv()` will return `None`.
     let _ = shutdown_complete_rx.recv().await;
 
+    // TODO: drop mpsx for every client and oneshots here?
+
     Ok(())
 }
 
@@ -233,10 +246,14 @@ impl Listener {
             let mut handler = Handler {
                 // Get a handle to the shared database. Internally, this is an
                 // `Arc`, so a clone only increments the ref count.
-                replica: self.replica.clone(),
+                replica: self.replica_holder.replica(),
+
+                // Use another mpsc to send a message to the
+                // backup manager, it will take care of broadcasting and waiting for quorum
+                backups_manager_mpsc_tx: self.backups_manager.mpsc_tx.clone(),
 
                 // Initialize the connection state. This allocates read/write
-                // buffers to perform redis protocol frame parsing.
+                // buffers to perform protocol frame parsing.
                 connection: Connection::new(socket),
 
                 // The connection state needs a handle to the max connections
@@ -333,8 +350,8 @@ impl Handler {
             };
             info!(frame = ?frame, "received request frame");
 
-            // Convert the redis frame into a command struct. This returns an
-            // error if the frame is not a valid redis command or it is an
+            // Convert the frame into a command struct. This returns an
+            // error if the frame is not a valid command or it is an
             // unsupported command.
             let cmd = Command::from_frame(frame)?;
 
@@ -353,10 +370,13 @@ impl Handler {
             // database state as a result.
             //
             // The connection is passed into the apply function which allows the
-            // command to write response frames directly to the connection. In
-            // the case of pub/sub, multiple frames may be send back to the
-            // peer.
-            cmd.apply(&self.replica, &mut self.connection).await?;
+            // command to write response frames directly to the connection.
+            cmd.apply(
+                &self.replica,
+                &mut self.connection,
+                &self.backups_manager_mpsc_tx,
+            )
+            .await?;
         }
 
         Ok(())

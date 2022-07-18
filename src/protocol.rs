@@ -1,39 +1,9 @@
-use crate::commands::{Reply, Request};
+use crate::commands::{Prepare, PrepareOk, Reply, Request};
 use bytes::{Buf, Bytes};
-use std::collections::HashMap;
 use std::fmt;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::num::TryFromIntError;
 use std::string::FromUtf8Error;
-
-/// New types for making for easier specifications
-pub type ReplyTable = HashMap<(u128, u128), Reply>;
-
-#[derive(Debug)]
-pub struct ClientTable {
-    pub table: ReplyTable,
-}
-
-impl ClientTable {
-    pub fn new() -> Self {
-        Self {
-            table: HashMap::new(),
-        }
-    }
-
-    pub fn get_reply_frame(
-        &self,
-        &client_id: &u128,
-        &request_id: &u128,
-    ) -> Option<Frame> {
-        let maybe_reply = self.table.get(&(client_id, request_id));
-        return if maybe_reply.is_some() {
-            Some(Frame::Reply(maybe_reply.unwrap().clone()))
-        } else {
-            None
-        };
-    }
-}
 
 #[derive(Debug)]
 pub enum Error {
@@ -85,17 +55,8 @@ impl fmt::Display for Error {
 pub enum Frame {
     Request(Request),
     Reply(Reply),
-    Prepare {
-        view_number: u128,
-        op_number: u128,
-        commit_number: u128,
-        request: Request,
-    },
-    PrepareOk {
-        view_number: u128,
-        op_number: u128,
-        replica_number: u8,
-    },
+    Prepare(Prepare),
+    PrepareOk(PrepareOk),
     Commit {
         view_number: u128,
         commit_number: u128,
@@ -181,6 +142,21 @@ impl Frame {
                 get_line(src)?;
                 Ok(())
             }
+            b'>' => {
+                get_decimal(src)?;
+                get_decimal(src)?;
+                get_decimal(src)?;
+                get_decimal(src)?;
+                get_decimal(src)?;
+                get_line(src)?;
+                Ok(())
+            }
+            b'<' => {
+                get_decimal(src)?;
+                get_decimal(src)?;
+                get_decimal(src)?;
+                Ok(())
+            }
             actual => Err(format!(
                 "protocol error; invalid frame type byte `{}`",
                 actual
@@ -199,7 +175,7 @@ impl Frame {
         -<view_number>\r\n<request_id>\r\n<response>\r\n
 
         Prepare
-        ><view_number>\r\n<op_number>\r\n<commit_number>\r\n<request>\r\n
+        ><view_number>\r\n<op_number>\r\n<commit_number>\r\n<client_id>\r\n<request_id>\r\n<operation>\r\n
 
         PrepareOk
         <<view_number>\r\n<op_number>\r\n<replica_number>\r\n
@@ -250,7 +226,6 @@ impl Frame {
                     client_id,
                     request_id,
                     operation,
-                    response: None,
                 }))
             }
             b'-' => {
@@ -262,6 +237,34 @@ impl Frame {
                     view_number,
                     request_id,
                     response,
+                }))
+            }
+            b'>' => {
+                let view_number = get_decimal(src)?;
+                let op_number = get_decimal(src)?;
+                let commit_number = get_decimal(src)?;
+                let client_id = get_decimal(src)?;
+                let request_id = get_decimal(src)?;
+                let operation = Bytes::copy_from_slice(get_line(src)?);
+
+                Ok(Frame::Prepare(Prepare {
+                    view_number,
+                    op_number,
+                    commit_number,
+                    client_id,
+                    request_id,
+                    operation,
+                }))
+            }
+            // <<view_number>\r\n<op_number>\r\n<replica_number>\r\n
+            b'<' => {
+                let view_number = get_decimal(src)?;
+                let op_number = get_decimal(src)?;
+                let replica_number = get_decimal(src)?;
+                Ok(Frame::PrepareOk(PrepareOk {
+                    view_number,
+                    op_number,
+                    replica_number: replica_number as u8,
                 }))
             }
             _ => unimplemented!(),
@@ -306,6 +309,61 @@ impl Frame {
                 buf.push(b'\n');
                 Ok(Bytes::from(buf))
             }
+            Frame::Prepare(prepare) => {
+                // ><view_number>\r\n<op_number>\r\n<commit_number>\r\n<request>\r\n
+                let mut buf = Vec::new();
+                buf.push(b'>');
+                buf.extend_from_slice(
+                    prepare.view_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    prepare.op_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    prepare.commit_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    prepare.client_id.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    prepare.request_id.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(&prepare.operation);
+                buf.push(b'\r');
+                buf.push(b'\n');
+                Ok(Bytes::from(buf))
+            }
+            Frame::PrepareOk(prepare_ok) => {
+                // <<view_number>\r\n<op_number>\r\n<replica_number>\r\n
+                let mut buf = Vec::new();
+                buf.push(b'<');
+                buf.extend_from_slice(
+                    prepare_ok.view_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    prepare_ok.op_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    prepare_ok.replica_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                Ok(Bytes::from(buf))
+            }
             _ => Ok(Bytes::new()),
         }
     }
@@ -335,18 +393,27 @@ impl fmt::Display for Frame {
                 response.view_number,
                 str::from_utf8(&*response.response).unwrap()
             ),
+            Frame::Prepare(prepare) => write!(
+                fmt,
+                "Prepare: view_number={} op_number={} commit_number={} request_id={} view_number={} response={}",
+                prepare.view_number,
+                prepare.op_number,
+                prepare.commit_number,
+                prepare.request_id,
+                prepare.client_id,
+                str::from_utf8(&*prepare.operation).unwrap()
+            ),
+            Frame::PrepareOk(prepare_ok) => write!(
+                fmt,
+                "PrepareOk: view_number={} op_number={} replica_number={}",
+                prepare_ok.view_number,
+                prepare_ok.op_number,
+                prepare_ok.replica_number,
+            ),
             Frame::Error(msg) => write!(fmt, "error: {}", msg),
             _ => write!(fmt, "unknown frame"),
         }
     }
-}
-
-fn peek_u8(src: &mut Cursor<&[u8]>) -> Result<u8, Error> {
-    if !src.has_remaining() {
-        return Err(Error::Incomplete);
-    }
-
-    Ok(src.bytes().next().unwrap()?)
 }
 
 fn get_u8(src: &mut Cursor<&[u8]>) -> Result<u8, Error> {

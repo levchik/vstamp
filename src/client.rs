@@ -1,4 +1,4 @@
-use crate::commands::{Reply, Request};
+use crate::commands::{Prepare, PrepareOk, Reply, Request};
 use crate::{Connection, Frame};
 
 use bytes::Bytes;
@@ -13,6 +13,7 @@ use tracing::{debug, instrument};
 /// the [`connect`](fn@connect) function.
 ///
 /// Requests are issued using the various methods of `Client`.
+#[derive(Debug)]
 pub struct Client {
     /// The TCP connection decorated with the protocol encoder / decoder
     /// implemented using a buffered `TcpStream`.
@@ -80,7 +81,6 @@ impl Client {
     /// ```
     #[instrument(skip(self))]
     pub async fn request(&mut self, op: Bytes) -> crate::Result<Reply> {
-        // Create a `Request` command for the `key` and convert it to a frame.
         let frame = Request::new(0, 0, op).into_frame();
 
         debug!(request = ?frame);
@@ -90,11 +90,27 @@ impl Client {
         self.connection.write_frame(&frame).await?;
 
         // Wait for the response from the server
-        //
-        // Both `Simple` and `Bulk` frames are accepted. `Null` represents the
-        // key not being present and `None` is returned.
         match self.read_response().await? {
             Frame::Reply(value) => Ok(value),
+            frame => Err(frame.to_error()),
+        }
+    }
+
+    pub async fn prepare(
+        &mut self,
+        command: Prepare,
+    ) -> crate::Result<PrepareOk> {
+        let frame = command.into_frame();
+
+        debug!(request = ?frame);
+
+        // Write the frame to the socket. This writes the full frame to the
+        // socket, waiting if necessary.
+        self.connection.write_frame(&frame).await?;
+
+        // Wait for the response from the server
+        match self.read_response().await? {
+            Frame::PrepareOk(prepare_ok) => Ok(prepare_ok),
             frame => Err(frame.to_error()),
         }
     }

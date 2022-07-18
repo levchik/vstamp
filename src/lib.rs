@@ -9,9 +9,8 @@ pub mod replica;
 pub use replica::{Replica, ReplicaConfig};
 mod shutdown;
 use shutdown::Shutdown;
+mod backup;
 pub mod server;
-
-use std::sync::{Arc, Mutex};
 
 /// Error returned by most functions.
 ///
@@ -29,6 +28,3 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 /// A specialized `Result` type for operations.
 /// This is defined as a convenience.
 pub type Result<T> = std::result::Result<T, Error>;
-
-/// This is also defined as a convenience.
-pub type GuardedReplica = Arc<Mutex<Replica>>;
