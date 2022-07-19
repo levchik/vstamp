@@ -1,7 +1,7 @@
 use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::info;
-use vstamp::{server, ReplicaConfig, KVApp};
+use vstamp::{server, KVApp, ReplicaConfig};
 
 #[tokio::main]
 async fn main() -> vstamp::Result<()> {

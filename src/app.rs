@@ -1,12 +1,11 @@
-use std::borrow::Borrow;
 use bytes::Bytes;
+use std::borrow::Borrow;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 struct SetCmd {
     key: Bytes,
     value: Bytes,
-    timestamp: u128,
 }
 
 struct GetCmd {
@@ -15,15 +14,12 @@ struct GetCmd {
 
 struct DeleteCmd {
     key: Bytes,
-    timestamp: u128,
 }
 
 #[derive(Debug)]
 pub struct KVEntry {
     pub key: Vec<u8>,
     pub value: Option<Vec<u8>>,
-    pub timestamp: u128,
-    pub deleted: bool,
 }
 
 pub(crate) type GuardedKVApp = Arc<Mutex<KVApp>>;
@@ -44,13 +40,14 @@ impl KVApp {
 
     pub fn apply(&mut self, mut request: Bytes) -> Bytes {
         let request_str = std::str::from_utf8(&*request).unwrap().to_string();
-        let parts: Vec<String> = request_str.split_whitespace().map(String::from).collect();
+        let parts: Vec<String> =
+            request_str.split_whitespace().map(String::from).collect();
 
-        let cmd = parts[0].as_str();
-        match cmd {
+        let cmd_symbol = parts[0].as_str();
+        match cmd_symbol {
             "S" => {
                 let cmd = self.parse_set(parts);
-                self.set(&*cmd.key, &*cmd.value, cmd.timestamp);
+                self.set(&*cmd.key, &*cmd.value);
                 Bytes::from(cmd.value)
             }
             "G" => {
@@ -65,21 +62,19 @@ impl KVApp {
             }
             "D" => {
                 let cmd = self.parse_delete(parts);
-                self.delete(&*cmd.key, cmd.timestamp);
+                self.delete(&*cmd.key);
                 Bytes::from_static("".as_ref())
             }
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
     }
 
     fn parse_set(&mut self, tokens: Vec<String>) -> SetCmd {
         let key = tokens[1].clone();
         let value = tokens[2].clone();
-        let timestamp = tokens[3].clone();
         SetCmd {
             key: Bytes::from(key),
             value: Bytes::from(value),
-            timestamp: timestamp.parse::<u128>().unwrap(),
         }
     }
 
@@ -92,10 +87,8 @@ impl KVApp {
 
     fn parse_delete(&mut self, tokens: Vec<String>) -> DeleteCmd {
         let key = tokens[1].clone();
-        let timestamp = tokens[2].clone();
         DeleteCmd {
             key: Bytes::from(key),
-            timestamp: timestamp.parse::<u128>().unwrap(),
         }
     }
 
@@ -115,12 +108,10 @@ impl KVApp {
         self.data.binary_search_by_key(&key, |e| e.key.as_slice())
     }
 
-    pub fn set(&mut self, key: &[u8], value: &[u8], timestamp: u128) {
+    pub fn set(&mut self, key: &[u8], value: &[u8]) {
         let entry = KVEntry {
             key: key.to_owned(),
             value: Some(value.to_owned()),
-            timestamp,
-            deleted: false,
         };
 
         match self.get_index(key) {
@@ -135,18 +126,16 @@ impl KVApp {
                 self.data[idx] = entry;
             }
             Err(idx) => {
-                self.size += key.len() + value.len() + 16 + 1;
+                self.size += key.len() + value.len() + 16;
                 self.data.insert(idx, entry)
             }
         }
     }
 
-    pub fn delete(&mut self, key: &[u8], timestamp: u128) {
+    pub fn delete(&mut self, key: &[u8]) {
         let entry = KVEntry {
             key: key.to_owned(),
             value: None,
-            timestamp,
-            deleted: true,
         };
         match self.get_index(key) {
             Ok(idx) => {
@@ -156,7 +145,7 @@ impl KVApp {
                 self.data[idx] = entry;
             }
             Err(idx) => {
-                self.size += key.len() + 16 + 1;
+                self.size += key.len() + 16;
                 self.data.insert(idx, entry);
             }
         }

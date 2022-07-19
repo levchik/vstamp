@@ -1,4 +1,4 @@
-use crate::commands::{Prepare, PrepareOk, Reply, Request};
+use crate::commands::{Commit, Prepare, PrepareOk, Reply, Request};
 use bytes::{Buf, Bytes};
 use std::fmt;
 use std::io::Cursor;
@@ -57,10 +57,7 @@ pub enum Frame {
     Reply(Reply),
     Prepare(Prepare),
     PrepareOk(PrepareOk),
-    Commit {
-        view_number: u128,
-        commit_number: u128,
-    },
+    Commit(Commit),
     StartViewChange {
         view_number: u128,
         replica_number: u8,
@@ -153,6 +150,11 @@ impl Frame {
             }
             b'<' => {
                 get_decimal(src)?;
+                get_decimal(src)?;
+                get_decimal(src)?;
+                Ok(())
+            }
+            b'!' => {
                 get_decimal(src)?;
                 get_decimal(src)?;
                 Ok(())
@@ -256,7 +258,6 @@ impl Frame {
                     operation,
                 }))
             }
-            // <<view_number>\r\n<op_number>\r\n<replica_number>\r\n
             b'<' => {
                 let view_number = get_decimal(src)?;
                 let op_number = get_decimal(src)?;
@@ -265,6 +266,14 @@ impl Frame {
                     view_number,
                     op_number,
                     replica_number: replica_number as u8,
+                }))
+            }
+            b'!' => {
+                let view_number = get_decimal(src)?;
+                let commit_number = get_decimal(src)?;
+                Ok(Frame::Commit(Commit {
+                    view_number,
+                    commit_number,
                 }))
             }
             _ => unimplemented!(),
@@ -364,6 +373,22 @@ impl Frame {
                 buf.push(b'\n');
                 Ok(Bytes::from(buf))
             }
+            Frame::Commit(commit) => {
+                // !<view_number>\r\n<commit_number>\r\n
+                let mut buf = Vec::new();
+                buf.push(b'!');
+                buf.extend_from_slice(
+                    commit.view_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                buf.extend_from_slice(
+                    commit.commit_number.to_string().as_bytes(),
+                );
+                buf.push(b'\r');
+                buf.push(b'\n');
+                Ok(Bytes::from(buf))
+            }
             _ => Ok(Bytes::new()),
         }
     }
@@ -409,6 +434,12 @@ impl fmt::Display for Frame {
                 prepare_ok.view_number,
                 prepare_ok.op_number,
                 prepare_ok.replica_number,
+            ),
+            Frame::Commit(commit) => write!(
+                fmt,
+                "Commit: view_number={} commit_number={}",
+                commit.view_number,
+                commit.commit_number,
             ),
             Frame::Error(msg) => write!(fmt, "error: {}", msg),
             _ => write!(fmt, "unknown frame"),

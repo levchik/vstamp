@@ -1,5 +1,5 @@
 use crate::client;
-use crate::commands::Prepare;
+use crate::commands::{Commit, Prepare};
 use futures::{stream::FuturesUnordered, StreamExt};
 use std::error::Error;
 use std::fmt;
@@ -45,6 +45,9 @@ pub enum ManagerCommand {
         command: Prepare,
         resp_tx: Responder<()>,
     },
+    BroadcastCommit {
+        command: Commit
+    },
     Emtpy,
 }
 
@@ -63,10 +66,13 @@ impl ReplicaManager {
 
         let manager = tokio::spawn(async move {
             let mut clients = Vec::new();
+            // Just high enough number to specify leader's client_id
             let client_id: u128 = 999_999_999_999_999_999u128.to_be();
             for replica_address in replicas_addresses.iter() {
                 clients.push(
-                    client::connect(replica_address.clone(), client_id).await.unwrap(),
+                    client::connect(replica_address.clone(), client_id)
+                        .await
+                        .unwrap(),
                 )
             }
             debug!("Connected to other replicas {:?}", replicas_addresses);
@@ -108,6 +114,11 @@ impl ReplicaManager {
                                 // validate them & possibly tell them that they are failing???
                                 break;
                             }
+                        }
+                    }
+                    ManagerCommand::BroadcastCommit { command } => {
+                        for client in clients.iter_mut() {
+                            client.commit(command.clone()).await;
                         }
                     }
                     ManagerCommand::Emtpy => {}

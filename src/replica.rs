@@ -295,7 +295,7 @@ impl Replica {
         Self { info }
     }
 
-    pub fn get_view_number(&self) -> u128 {
+    pub fn c(&self) -> u128 {
         let info = self.info.lock().unwrap();
         info.state.view_number
     }
@@ -303,6 +303,11 @@ impl Replica {
     pub fn get_op_number(&self) -> u128 {
         let info = self.info.lock().unwrap();
         info.state.op_number
+    }
+
+    pub fn get_view_number(&self) -> u128 {
+        let info = self.info.lock().unwrap();
+        info.state.view_number
     }
 
     pub fn get_commit_number(&self) -> u128 {
@@ -323,6 +328,11 @@ impl Replica {
     pub fn get_current_replica_number(&self) -> u8 {
         let info = self.info.lock().unwrap();
         info.state.replica_number
+    }
+
+    pub fn is_primary_and_normal(&self) -> bool {
+        let info = self.info.lock().unwrap();
+        info.status == ReplicaStatus::Normal && info.state.replica_number == 0
     }
 
     pub fn append_to_log(&self, operation: Bytes) {

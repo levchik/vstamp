@@ -32,7 +32,7 @@ impl Request {
         &self,
         replica: &Replica,
         dst: &mut Connection,
-        backups_sender: &Sender<ManagerCommand>,
+        manager_sender: &Sender<ManagerCommand>,
         app: &GuardedKVApp,
     ) -> crate::Result<()> {
         /*
@@ -75,7 +75,7 @@ impl Request {
 
                     // Then it sends a PREPARE message to the other replicas.
                     let (resp_tx, resp_rx) = oneshot::channel();
-                    backups_sender
+                    manager_sender
                         .send(ManagerCommand::BroadcastPrepare {
                             command: Prepare {
                                 view_number: replica.get_view_number(),
@@ -95,7 +95,7 @@ impl Request {
                     // the operation (and all earlier ones) to be committed.
 
                     // Await the backup manager response.
-                    // It completes future only after quota of PREPAREOK messages are received.
+                    // It completes future only after quorum of PREPAREOK messages are received.
                     let res = resp_rx.await;
                     debug!("GOT (Prepare) = {:?}", res);
                     match res {
@@ -107,9 +107,10 @@ impl Request {
 
                             // NOTE: Advancing the commit-num must be done in strict order,
                             //       and it means that all previous operations have been committed.
-                            let response = app.lock().unwrap().apply(
-                                self.operation.clone()
-                            );
+                            let response = app
+                                .lock()
+                                .unwrap()
+                                .apply(self.operation.clone());
                             replica.advance_commit_number();
 
                             // Then it sends a REPLY message to the client.

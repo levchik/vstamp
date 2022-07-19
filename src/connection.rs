@@ -5,7 +5,7 @@ use bytes::{Buf, BytesMut};
 use std::io::Cursor;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Debug)]
 pub struct Connection {
@@ -30,6 +30,7 @@ impl Connection {
             // enough data has been buffered, the frame is
             // returned.
             if let Some(frame) = self.parse_frame()? {
+                // TODO: Reset timer that sends COMMIT messages.
                 return Ok(Some(frame));
             }
 

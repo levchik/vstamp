@@ -1,4 +1,4 @@
-use crate::commands::{Prepare, PrepareOk, Reply, Request};
+use crate::commands::{Commit, Prepare, PrepareOk, Reply, Request};
 use crate::{Connection, Frame};
 
 use bytes::Bytes;
@@ -7,24 +7,23 @@ use tokio::net::{TcpStream, ToSocketAddrs};
 use tracing::{debug, instrument};
 
 /// Established connection with a server.
-///
-/// Backed by a single `TcpStream`, `Client` provides basic network client
-/// functionality (no pooling, retrying, ...). Connections are established using
-/// the [`connect`](fn@connect) function.
-///
 /// Requests are issued using the various methods of `Client`.
 #[derive(Debug)]
 pub struct Client {
-    /// The TCP connection decorated with the protocol encoder / decoder
-    /// implemented using a buffered `TcpStream`.
-    ///
-    /// When `Listener` receives an inbound connection, the `TcpStream` is
-    /// passed to `Connection::new`, which initializes the associated buffers.
     /// `Connection` allows the handler to operate at the "frame" level and keep
     /// the byte level protocol parsing details encapsulated in `Connection`.
     connection: Connection,
     id: u128,
-    request_id: u128
+    request_id: u128,
+    /*
+    TODO:
+    The client-side proxy has state:
+     - It records the configuration
+     - What it believes is the current view-number
+
+    Each message sent to the client informs it of the current view-number;
+    this allows the client to track the primary.
+    */
 }
 
 /// Establish a connection with the server located at `addr`.
@@ -48,7 +47,10 @@ pub struct Client {
 /// }
 /// ```
 ///
-pub async fn connect<T: ToSocketAddrs>(addr: T, client_id: u128) -> crate::Result<Client> {
+pub async fn connect<T: ToSocketAddrs>(
+    addr: T,
+    client_id: u128,
+) -> crate::Result<Client> {
     // The `addr` argument is passed directly to `TcpStream::connect`. This
     // performs any asynchronous DNS lookup and attempts to establish the TCP
     // connection. An error at either step returns an error, which is then
@@ -62,7 +64,7 @@ pub async fn connect<T: ToSocketAddrs>(addr: T, client_id: u128) -> crate::Resul
     Ok(Client {
         connection,
         id: client_id,
-        request_id: 0
+        request_id: 0,
     })
 }
 
@@ -87,6 +89,10 @@ impl Client {
     /// ```
     #[instrument(skip(self))]
     pub async fn request(&mut self, op: Bytes) -> crate::Result<Reply> {
+        /*
+        TODO:
+            A client is allowed to have just one outstanding request at a time.
+        */
         self.request_id += 1;
         let frame = Request::new(self.id, self.request_id, op).into_frame();
 
@@ -96,7 +102,10 @@ impl Client {
         // socket, waiting if necessary.
         self.connection.write_frame(&frame).await?;
 
-        // Wait for the response from the server
+        // TODO:
+        // If a client doesn't receive a timely response, it re-sends the request to all replicas.
+        // This way if the group has moved to a later view, its message will reach the new primary.
+        // Backups ignore client requests; only the primary processes them.
         match self.read_response().await? {
             Frame::Reply(value) => Ok(value),
             frame => Err(frame.to_error()),
@@ -122,14 +131,21 @@ impl Client {
         }
     }
 
-    /// Reads a response frame from the socket.
-    ///
-    /// If an `Error` frame is received, it is converted to `Err`.
+    pub async fn commit(&mut self, command: Commit) -> crate::Result<()> {
+        let frame = command.into_frame();
+
+        debug!(request = ?frame);
+
+        // Write the frame to the socket. This writes the full frame to the
+        // socket, waiting if necessary.
+        self.connection.write_frame(&frame).await?;
+        Ok(())
+    }
+
     async fn read_response(&mut self) -> crate::Result<Frame> {
         let response = self.connection.read_frame().await?;
 
         debug!(response = ?response);
-        // info!(frame = ?frame, "received request frame");
 
         match response {
             // Error frames are converted to `Err`

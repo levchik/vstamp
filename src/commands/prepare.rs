@@ -3,6 +3,7 @@ use crate::replica::ReplicaError;
 use crate::{Connection, Frame, Replica};
 use bytes::Bytes;
 use tracing::{debug, instrument};
+use crate::app::GuardedKVApp;
 
 #[derive(Debug, Clone)]
 pub struct Prepare {
@@ -42,6 +43,7 @@ impl Prepare {
         &self,
         replica: &Replica,
         dst: &mut Connection,
+        app: &GuardedKVApp,
     ) -> crate::Result<()> {
         /*
         Replicas only process normal protocol messages containing a view-number
@@ -75,6 +77,7 @@ impl Prepare {
                 waits until it has entries in its log for all earlier requests
                 (doing state transfer if necessary to get the missing information).
                 */
+
                 // TODO: should check full no-gaps, or just checking last op-number is sufficient?
                 match replica.ensure_consecutive_op_number(self.op_number) {
                     Err(e) => match e {
@@ -97,6 +100,28 @@ impl Prepare {
                             &self.client_id,
                             &self.request_id,
                         );
+
+                        //                         if self.commit_number > replica.commit_number {
+                        //     replica.set_commit_number(self.commit_number);
+                        //     replica.commit_to_log();
+                        // } else {
+                        //     // Replica received a PREPARE message with a commit-number that is
+                        //     // less than or equal to its current commit-number.
+                        //     // It might be a duplicate, or it might mean that requester was offline
+                        //     // for quite a while, and it got behind.
+                        //     // In either case, this is a violation of the protocol, and the
+                        //     // replica should drop the message.
+                        //     Ok(())
+                        // }
+                        // for commit in replica.get_commit_number()..self.commit_number {
+                        //
+                        // }
+                        // let response = app
+                        //     .lock()
+                        //     .unwrap()
+                        //     .apply(self.operation.clone());
+                        // replica.advance_commit_number();
+
                         let prepare_ok = PrepareOk::new(
                             self.view_number,
                             self.op_number,

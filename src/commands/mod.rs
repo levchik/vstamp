@@ -11,6 +11,9 @@ pub use prepare::Prepare;
 mod prepareok;
 pub use prepareok::PrepareOk;
 mod unknown;
+mod commit;
+pub use commit::Commit;
+
 pub use unknown::Unknown;
 
 use crate::app::GuardedKVApp;
@@ -26,6 +29,7 @@ pub enum Command {
     Reply(Reply),
     Prepare(Prepare),
     PrepareOk(PrepareOk),
+    Commit(Commit),
     Unknown(Unknown),
 }
 
@@ -45,7 +49,7 @@ impl Command {
             Frame::Reply(reply) => Ok(Command::Reply(reply)),
             Frame::Prepare(prepare) => Ok(Command::Prepare(prepare)),
             Frame::PrepareOk(prepare_ok) => Ok(Command::PrepareOk(prepare_ok)),
-            // _ => Err(crate::Error::Protocol("invalid command".into())),
+            Frame::Commit(commit) => Ok(Command::Commit(commit)),
             _ => Err("invalid command"),
         }
         .expect("Unable to parse frame into concrete command");
@@ -62,16 +66,17 @@ impl Command {
         self,
         replica: &Replica,
         dst: &mut Connection,
-        backups_sender: &Sender<ManagerCommand>,
+        manager_sender: &Sender<ManagerCommand>,
         app: &GuardedKVApp,
     ) -> crate::Result<()> {
         use Command::*;
 
         match self {
-            Request(cmd) => cmd.apply(replica, dst, backups_sender, app).await,
+            Request(cmd) => cmd.apply(replica, dst, manager_sender, app).await,
             Reply(cmd) => cmd.apply(replica, dst).await,
-            Prepare(cmd) => cmd.apply(replica, dst).await,
+            Prepare(cmd) => cmd.apply(replica, dst, app).await,
             PrepareOk(cmd) => cmd.apply(replica, dst).await,
+            Commit(cmd) => cmd.apply(replica, dst, app).await,
             Unknown(cmd) => cmd.apply(dst).await,
         }
     }

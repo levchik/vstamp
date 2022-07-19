@@ -1,26 +1,29 @@
+use std::borrow::BorrowMut;
 use crate::{Command, Connection, Replica, Shutdown};
-
 use crate::app::{GuardedKVApp, KVApp};
+use crate::commands::Commit;
 use crate::manager::{ManagerCommand, ReplicaManager};
 use crate::replica::{ReplicaConfig, ReplicaDropGuard};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use futures::stream;
+use futures::StreamExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc, Semaphore};
-use tokio::time::{self, Duration};
-use tracing::{error, info, instrument};
+use tokio::sync::{broadcast, mpsc, oneshot, Semaphore};
+use tokio::time::{self, Duration, Instant};
+use tracing::{debug, error, info, instrument};
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
 /// which performs the TCP listening and initialization of per-connection state.
 #[derive(Debug)]
 struct Listener {
-    app: GuardedKVApp,
-    /// This is a wrapper around an `Arc`. This enables to be cloned and
+    /// These are under wrapper around an `Arc`. This enables to be cloned and
     /// passed into the per connection state (`Handler`).
+    app: GuardedKVApp,
     replica_holder: ReplicaDropGuard,
 
     /// This is a single point of entry for communication between the replicas.
-    backups_manager: ReplicaManager,
+    manager: ReplicaManager,
 
     /// TCP listener supplied by the `run` caller.
     listener: TcpListener,
@@ -59,6 +62,8 @@ struct Listener {
     /// is safe to exit the server process.
     shutdown_complete_rx: mpsc::Receiver<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
+    /// Used as part of ensuring that replicas commit their log even if no client msgs being sent
+    commit_timer_tx: mpsc::Sender<()>,
 }
 
 /// Per-connection handler
@@ -68,7 +73,7 @@ struct Handler {
     app: GuardedKVApp,
     /// Single mpsc channel will be created on initialization. It is used to
     /// send messages to ReplicaManager that handles all replica-to-replica communication.
-    backups_manager_mpsc_tx: mpsc::Sender<ManagerCommand>,
+    manager_mpsc_tx: mpsc::Sender<ManagerCommand>,
 
     /// The TCP connection decorated with the protocol encoder / decoder
     /// implemented using a buffered `TcpStream`.
@@ -96,8 +101,11 @@ struct Handler {
     /// which point the connection is terminated.
     shutdown: Shutdown,
 
-    /// Not used directly. Instead, when `Handler` is dropped...?
+    /// Used as part of the graceful shutdown process to wait for client
     _shutdown_complete: mpsc::Sender<()>,
+
+    /// Used as part of the graceful shutdown process to wait for timer off
+    commit_timer_tx: mpsc::Sender<()>,
 }
 
 /// Maximum number of concurrent connections the server will accept.
@@ -132,28 +140,66 @@ pub async fn run(
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
 
+    // Create timer that sends periodic COMMIT messages to all replicas
+    // Timer gets reset if any client sends us any request since we do PREPARE
+    let (commit_timer_tx, mut commit_timer_rx) = mpsc::channel(1);
+
     let backup_addresses = replica_config.get_backup_addresses();
 
+    let replica_holder = ReplicaDropGuard::new(replica_config);
+    let replica = replica_holder.replica();
+    let manager = ReplicaManager::new(backup_addresses);
+    let manager_tx = manager.mpsc_tx.clone();
+
     // Initialize the listener state
-    let mut server = Listener {
+    let mut listener = Listener {
         listener,
         app: Arc::new(Mutex::new(app)),
-        replica_holder: ReplicaDropGuard::new(replica_config),
+        replica_holder: replica_holder,
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-        backups_manager: ReplicaManager::new(backup_addresses),
+        manager: manager,
         notify_shutdown,
         shutdown_complete_tx,
         shutdown_complete_rx,
+        commit_timer_tx
     };
 
-    // Concurrently run the server and listen for the `shutdown` signal. The
-    // server task runs until an error is encountered, so under normal
+    /*
+    If the primary does not receive a new client request in a timely way, it
+    instead informs the backups of the latest commit by sending them a COMMIT message.
+    */
+    let timer = tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(2));
+        interval.tick().await;
+        loop {
+            let _ = tokio::select! {
+                r = interval.tick() => {
+                    // If this is PRIMARY replica & in NORMAL status
+                    if replica.is_primary_and_normal() {
+                        debug!("Sending COMMIT to replicas");
+                        let _ = manager_tx.send(ManagerCommand::BroadcastCommit {
+                            command: Commit {
+                                view_number: replica.get_view_number(),
+                                commit_number: replica.get_commit_number(),
+                            }
+                        });
+                    }
+                },
+                s = commit_timer_rx.recv() => {
+                    // The client gave us request, so we can reset the timer
+                    interval.reset();
+                }
+            };
+        }
+    });
+    // Concurrently run the listener and listen for the `shutdown` signal. The
+    // listener task runs until an error is encountered, so under normal
     // circumstances, this `select!` statement runs until the `shutdown` signal
     // is received.
     tokio::select! {
-        res = server.run() => {
+        res = listener.run() => {
             // If an error is received here, accepting connections from the TCP
-            // listener failed multiple times and the server is giving up and
+            // listener failed multiple times and the listener is giving up and
             // shutting down.
             //
             // Errors encountered when handling individual connections do not
@@ -174,13 +220,16 @@ pub async fn run(
         mut shutdown_complete_rx,
         shutdown_complete_tx,
         notify_shutdown,
+        commit_timer_tx,
         ..
-    } = server;
+    } = listener;
     // When `notify_shutdown` is dropped, all tasks which have `subscribe`d will
     // receive the shutdown signal and can exit
     drop(notify_shutdown);
     // Drop final `Sender` so the `Receiver` below can complete
     drop(shutdown_complete_tx);
+    // Drop timer
+    drop(commit_timer_tx);
 
     // Wait for all active connections to finish processing. As the `Sender`
     // handle held by the listener has been dropped above, the only remaining
@@ -211,7 +260,6 @@ impl Listener {
     /// strategy, which is what we do here.
     async fn run(&mut self) -> crate::Result<()> {
         info!("Accepting inbound connections...");
-
         loop {
             // Wait for a permit to become available
             //
@@ -238,7 +286,7 @@ impl Listener {
 
                 // Use another mpsc to send a message to the
                 // backup manager, it will take care of broadcasting and waiting for quorum
-                backups_manager_mpsc_tx: self.backups_manager.mpsc_tx.clone(),
+                manager_mpsc_tx: self.manager.mpsc_tx.clone(),
 
                 // Initialize the connection state. This allocates read/write
                 // buffers to perform protocol frame parsing.
@@ -255,6 +303,10 @@ impl Listener {
                 // Notifies the receiver half once all clones are
                 // dropped.
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
+
+                // Notifies the receiver half once all clones are
+                // dropped.
+                commit_timer_tx: self.commit_timer_tx.clone(),
             };
 
             // Spawn a new task to process the connections. Tokio tasks are like
@@ -307,10 +359,6 @@ impl Handler {
     /// Request frames are read from the socket and processed. Responses are
     /// written back to the socket.
     ///
-    /// Currently, pipelining is not implemented. Pipelining is the ability to
-    /// process more than one request concurrently per connection without
-    /// interleaving frames.
-    ///
     /// When the shutdown signal is received, the connection is processed until
     /// it reaches a safe state, at which point it is terminated.
     #[instrument(skip(self))]
@@ -321,7 +369,11 @@ impl Handler {
             // While reading a request frame, also listen for the shutdown
             // signal.
             let maybe_frame = tokio::select! {
-                res = self.connection.read_frame() => res?,
+                res = self.connection.read_frame() => {
+                    // If we got a frame from a client, it's ok not to send COMMIT to replicas
+                    let _ = self.commit_timer_tx.send(()).await?;
+                    res?
+                },
                 _ = self.shutdown.recv() => {
                     // If a shutdown signal is received, return from `run`.
                     // This will result in the task terminating.
@@ -343,15 +395,6 @@ impl Handler {
             // unsupported command.
             let cmd = Command::from_frame(frame)?;
 
-            // Logs the `cmd` object. The syntax here is a shorthand provided by
-            // the `tracing` crate. It can be thought of as similar to:
-            //
-            // ```
-            // debug!(cmd = format!("{:?}", cmd));
-            // ```
-            //
-            // `tracing` provides structured logging, so information is "logged"
-            // as key-value pairs.
             info!(?cmd);
 
             // Perform the work needed to apply the command. This may mutate the
@@ -362,7 +405,7 @@ impl Handler {
             cmd.apply(
                 &self.replica,
                 &mut self.connection,
-                &self.backups_manager_mpsc_tx,
+                &self.manager_mpsc_tx,
                 &self.app,
             )
             .await?;
