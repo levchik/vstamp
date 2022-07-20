@@ -1,10 +1,10 @@
+use crate::app::GuardedKVApp;
 use crate::commands::PrepareOk;
 use crate::replica::ReplicaError;
 use crate::{Connection, Frame, Replica};
 use bytes::Bytes;
-use tracing::{debug, instrument};
 use tracing::field::debug;
-use crate::app::GuardedKVApp;
+use tracing::{debug, instrument};
 
 #[derive(Debug, Clone)]
 pub struct Prepare {
@@ -96,15 +96,21 @@ impl Prepare {
                     },
                     Ok(_) => {
                         replica.advance_op_number();
-                        replica.append_to_log(self.client_id, self.request_id,self.operation.clone());
+                        replica.append_to_log(
+                            self.client_id,
+                            self.request_id,
+                            self.operation.clone(),
+                        );
                         replica.insert_to_client_table(
                             &self.client_id,
                             &self.request_id,
                         );
 
-                        let current_commit_number = replica.get_commit_number();
+                        let current_commit_number =
+                            replica.get_commit_number();
                         if self.commit_number > current_commit_number {
-                            replica.process_up_to_commit(app, self.commit_number);
+                            replica
+                                .process_up_to_commit(app, self.commit_number);
                         } else {
                             // Replica received a PREPARE message with a commit-number that is
                             // less than or equal to its current commit-number.

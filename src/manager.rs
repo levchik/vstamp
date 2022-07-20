@@ -6,7 +6,9 @@ use std::fmt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tracing::debug;
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tokio_retry::Retry;
+use tracing::{debug, info};
 
 #[derive(Debug)]
 pub enum CommandError {
@@ -46,7 +48,7 @@ pub enum ManagerCommand {
         resp_tx: Responder<()>,
     },
     BroadcastCommit {
-        command: Commit
+        command: Commit,
     },
     Emtpy,
 }
@@ -69,17 +71,31 @@ impl ReplicaManager {
             // Just high enough number to specify leader's client_id
             let client_id: u128 = 999_999_999_999_999_999u128.to_be();
             for replica_address in replicas_addresses.iter() {
-                clients.push(
+                // TODO: check for multiple replica connection in parallel
+                const MAX_RETRIES: usize = 5;
+                let retry_strategy = ExponentialBackoff::from_millis(10)
+                    .map(jitter)
+                    .take(MAX_RETRIES);
+                info!("Trying to connect to other replicas...");
+                info!(
+                    "Waiting at most 60 seconds for replicas to be ready..."
+                );
+                let result = Retry::spawn(retry_strategy, move || {
                     client::connect(replica_address.clone(), client_id)
-                        .await
-                        .unwrap(),
-                )
+                })
+                .await
+                .expect(&*format!(
+                    "Failed to connect to replica {}",
+                    replica_address
+                ));
+                clients.push(result);
             }
             debug!("Connected to other replicas {:?}", replicas_addresses);
             while let Some(cmd) = mpsc_rx.recv().await {
                 match cmd {
                     ManagerCommand::BroadcastPrepare { command, resp_tx } => {
                         let mut tasks = FuturesUnordered::new();
+                        debug!("Broadcasting prepare command");
                         for client in clients.iter_mut() {
                             tasks.push(client.prepare(command.clone()))
                         }
@@ -117,8 +133,12 @@ impl ReplicaManager {
                         }
                     }
                     ManagerCommand::BroadcastCommit { command } => {
+                        debug!("Broadcasting commit command");
                         for client in clients.iter_mut() {
-                            client.commit(command.clone()).await.expect("Sending commit failed");
+                            client
+                                .commit(command.clone())
+                                .await
+                                .expect("Sending commit failed");
                         }
                     }
                     ManagerCommand::Emtpy => {}

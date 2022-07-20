@@ -1,11 +1,12 @@
+use crate::app::GuardedKVApp;
 use crate::commands::Reply;
 use bytes::Bytes;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{debug, info};
-use crate::app::GuardedKVApp;
 
 #[derive(Debug)]
 pub enum ReplicaError {
@@ -211,7 +212,11 @@ enum ReplicaStatus {
 pub(crate) struct ReplicaLogEntry(u128, u128, Bytes);
 
 impl ReplicaLogEntry {
-    pub(crate) fn new(client_id: u128, request_id: u128, operation: Bytes) -> Self {
+    pub(crate) fn new(
+        client_id: u128,
+        request_id: u128,
+        operation: Bytes,
+    ) -> Self {
         Self(client_id, request_id, operation)
     }
 }
@@ -222,8 +227,15 @@ pub(crate) struct ReplicaLog {
 }
 
 impl ReplicaLog {
-    pub fn append(&mut self, client_id: u128, request_id: u128, operation: Bytes) {
-        let _ = &self.operations.push(ReplicaLogEntry::new(client_id, request_id, operation));
+    pub fn append(
+        &mut self,
+        client_id: u128,
+        request_id: u128,
+        operation: Bytes,
+    ) {
+        let _ = &self
+            .operations
+            .push(ReplicaLogEntry::new(client_id, request_id, operation));
     }
 }
 
@@ -289,7 +301,6 @@ pub struct Replica {
 
 impl Replica {
     pub fn new(replica_config: ReplicaConfig) -> Self {
-        // Consider using parking_lot::Mutex as a faster alternative to std::sync::Mutex.
         let info = Arc::new(Mutex::new(ReplicaInfo {
             status: ReplicaStatus::Normal,
             state: ReplicaState {
@@ -308,52 +319,57 @@ impl Replica {
     }
 
     pub fn c(&self) -> u128 {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.state.view_number
     }
 
     pub fn get_op_number(&self) -> u128 {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.state.op_number
     }
 
     pub fn get_view_number(&self) -> u128 {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.state.view_number
     }
 
     pub fn get_commit_number(&self) -> u128 {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.state.commit_number
     }
 
     pub fn advance_op_number(&self) -> u128 {
-        let mut info = self.info.lock().unwrap();
+        let mut info = self.info.lock();
         info.state.advance_op_number()
     }
 
     pub fn advance_commit_number(&self) -> u128 {
-        let mut info = self.info.lock().unwrap();
+        let mut info = self.info.lock();
         info.state.advance_commit_number()
     }
 
     pub fn get_current_replica_number(&self) -> u8 {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.state.replica_number
     }
 
     pub fn is_primary_and_normal(&self) -> bool {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.status == ReplicaStatus::Normal && info.state.replica_number == 0
     }
 
-    pub fn append_to_log(&self, client_id: u128, request_id: u128, operation: Bytes) {
-        let mut info = self.info.lock().unwrap();
+    pub fn append_to_log(
+        &self,
+        client_id: u128,
+        request_id: u128,
+        operation: Bytes,
+    ) {
+        let mut info = self.info.lock();
         info.state.log.append(client_id, request_id, operation)
     }
 
     pub fn ensure_normal_status(&self) -> Result<(), ClientError> {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         if info.status != ReplicaStatus::Normal {
             Err(ClientError::NotNormalStatus)
         } else {
@@ -365,7 +381,7 @@ impl Replica {
         &self,
         view_number: u128,
     ) -> Result<(), ReplicaError> {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         if info.state.view_number > view_number {
             Err(ReplicaError::ViewNumberBehind)
         } else if info.state.view_number < view_number {
@@ -379,7 +395,7 @@ impl Replica {
         &self,
         op_number: u128,
     ) -> Result<(), ReplicaError> {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         let target_last_op_number = op_number - 1;
         if info.state.op_number > target_last_op_number {
             Err(ReplicaError::OpNumberBehind)
@@ -390,24 +406,24 @@ impl Replica {
         }
     }
 
-    pub fn process_up_to_commit(&self, app: &GuardedKVApp, commit_number: u128) {
+    pub fn process_up_to_commit(
+        &self,
+        app: &GuardedKVApp,
+        commit_number: u128,
+    ) {
         // When a backup learns of a commit, it ensures it had executed all earlier operations.
         // Then it executes the operation by performing the up-call to the service code, increments
         // its commit-number.
         debug!("Processing up to commit number {}", commit_number);
-        let mut info = self.info.lock().unwrap();
+        let mut info = self.info.lock();
         let mut current_commit_number = info.state.commit_number;
         while current_commit_number < commit_number {
-            let operation = info.state.log.operations[current_commit_number as usize].clone();
-            let response = app
-                .lock()
-                .unwrap()
-                .apply(operation.2);
-            let reply = Reply::new(
-                info.state.view_number,
-                operation.1,
-                response,
-            );
+            let operation = info.state.log.operations
+                [current_commit_number as usize]
+                .clone();
+            let response = app.lock().apply(operation.2);
+            let reply =
+                Reply::new(info.state.view_number, operation.1, response);
             current_commit_number = info.state.advance_commit_number();
             // The server also updates the client’s
             // entry in the client-table to contain the result.
@@ -424,7 +440,7 @@ impl Replica {
         &client_id: &u128,
         &request_id: &u128,
     ) -> Result<Option<Reply>, ClientError> {
-        let info = self.info.lock().unwrap();
+        let info = self.info.lock();
         info.state
             .client_table
             .check_for_existing_reply(&client_id, &request_id)
@@ -435,7 +451,7 @@ impl Replica {
         &client_id: &u128,
         &request_id: &u128,
     ) -> Option<ClientTableRecord> {
-        let mut info = self.info.lock().unwrap();
+        let mut info = self.info.lock();
         info.state.client_table.insert(&client_id, &request_id)
     }
 
@@ -445,7 +461,7 @@ impl Replica {
         &request_id: &u128,
         reply: &Reply,
     ) {
-        let mut info = self.info.lock().unwrap();
+        let mut info = self.info.lock();
         info.state.client_table.update_with_reply(
             &client_id,
             &request_id,

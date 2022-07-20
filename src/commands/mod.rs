@@ -10,11 +10,8 @@ mod prepare;
 pub use prepare::Prepare;
 mod prepareok;
 pub use prepareok::PrepareOk;
-mod unknown;
 mod commit;
 pub use commit::Commit;
-
-pub use unknown::Unknown;
 
 use crate::app::GuardedKVApp;
 use crate::manager::ManagerCommand;
@@ -30,7 +27,6 @@ pub enum Command {
     Prepare(Prepare),
     PrepareOk(PrepareOk),
     Commit(Commit),
-    Unknown(Unknown),
 }
 
 impl Command {
@@ -77,7 +73,6 @@ impl Command {
             Prepare(cmd) => cmd.apply(replica, dst, app).await,
             PrepareOk(cmd) => cmd.apply(replica, dst).await,
             Commit(cmd) => cmd.apply(replica, dst, app).await,
-            Unknown(cmd) => cmd.apply(dst).await,
         }
     }
 }

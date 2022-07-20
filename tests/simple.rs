@@ -22,7 +22,10 @@ static TRACING: Lazy<()> = Lazy::new(|| {
         .expect("Failed to set global default subscriber");
 });
 
-async fn spawn_servers(n: usize, delay: u64) -> (Vec<JoinHandle<vstamp::Result<()>>>, Vec<String>) {
+async fn spawn_servers(
+    n: usize,
+    delay: u64,
+) -> (Vec<JoinHandle<vstamp::Result<()>>>, Vec<String>) {
     Lazy::force(&TRACING);
 
     let mut replicas_addresses = Vec::new();

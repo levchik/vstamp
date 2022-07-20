@@ -1,5 +1,6 @@
 use bytes::Bytes;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 struct SetCmd {
     key: Bytes,

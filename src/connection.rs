@@ -64,7 +64,7 @@ impl Connection {
         self.stream.write_all(&frame_bytes).await?;
 
         // frame_bytes.write_buf(&mut self.stream).await.expect("Could not write frame");
-        self.stream.flush().await.expect("Couldn't flush stream");
+        self.stream.flush().await?;
         Ok(())
     }
 

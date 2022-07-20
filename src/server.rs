@@ -1,10 +1,11 @@
-use crate::{Command, Connection, Replica, Shutdown};
 use crate::app::{GuardedKVApp, KVApp};
 use crate::commands::Commit;
 use crate::manager::{ManagerCommand, ReplicaManager};
 use crate::replica::{ReplicaConfig, ReplicaDropGuard};
+use crate::{Command, Connection, Replica, Shutdown};
+use parking_lot::Mutex;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio::time::{self, Duration};
@@ -129,6 +130,12 @@ pub async fn run(
     listener: TcpListener,
     shutdown: impl Future,
 ) -> crate::Result<()> {
+    // This ensures if any thread panics, whole process exits with 1.
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_panic(info);
+        std::process::exit(1);
+    }));
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -152,13 +159,13 @@ pub async fn run(
     let mut listener = Listener {
         listener,
         app: Arc::new(Mutex::new(app)),
-        replica_holder: replica_holder,
+        replica_holder,
         limit_connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-        manager: manager,
+        manager,
         notify_shutdown,
         shutdown_complete_tx,
         shutdown_complete_rx,
-        commit_timer_tx
+        commit_timer_tx,
     };
 
     /*
@@ -174,13 +181,14 @@ pub async fn run(
                 _ = interval.tick() => {
                     // If this is PRIMARY replica & in NORMAL status
                     if replica.is_primary_and_normal() {
-                        debug!("Sending COMMIT to replicas");
-                        let _ = manager_tx.send(ManagerCommand::BroadcastCommit {
+                        manager_tx.send(ManagerCommand::BroadcastCommit {
                             command: Commit {
                                 view_number: replica.get_view_number(),
                                 commit_number: replica.get_commit_number(),
                             }
-                        });
+                        })
+                        .await
+                        .expect("Couldn't broadcast commit command");
                     }
                 },
                 _ = commit_timer_rx.recv() => {

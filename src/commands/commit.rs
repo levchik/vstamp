@@ -1,9 +1,9 @@
+use crate::app::GuardedKVApp;
 use crate::commands::PrepareOk;
 use crate::replica::ReplicaError;
 use crate::{Connection, Frame, Replica};
 use bytes::Bytes;
 use tracing::{debug, instrument};
-use crate::app::GuardedKVApp;
 
 #[derive(Debug, Clone)]
 pub struct Commit {
@@ -12,10 +12,7 @@ pub struct Commit {
 }
 
 impl Commit {
-    pub fn new(
-        view_number: u128,
-        commit_number: u128,
-    ) -> Self {
+    pub fn new(view_number: u128, commit_number: u128) -> Self {
         Self {
             view_number,
             commit_number,

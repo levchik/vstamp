@@ -67,7 +67,11 @@ impl Request {
 
                     // TODO: these all could be under just one lock
                     replica.advance_op_number();
-                    replica.append_to_log(self.client_id, self.request_id,self.operation.clone());
+                    replica.append_to_log(
+                        self.client_id,
+                        self.request_id,
+                        self.operation.clone(),
+                    );
                     replica.insert_to_client_table(
                         &self.client_id,
                         &self.request_id,
@@ -107,15 +111,18 @@ impl Request {
 
                             // NOTE: Advancing the commit-num must be done in strict order,
                             //       and it means that all previous operations have been committed.
-                            let response = app
-                                .lock()
-                                .unwrap()
-                                .apply(self.operation.clone());
+                            let current_commit_number =
+                                replica.get_commit_number();
+                            replica.process_up_to_commit(
+                                app,
+                                current_commit_number,
+                            );
+                            let response =
+                                app.lock().apply(self.operation.clone());
                             replica.advance_commit_number();
 
                             // Then it sends a REPLY message to the client.
                             let reply = Reply::new(
-                                // TODO: can we use view_number calculated before?
                                 replica.get_view_number(),
                                 self.request_id,
                                 response,
@@ -134,7 +141,7 @@ impl Request {
                             Ok(())
                         }
                         Err(_) => {
-                            // If the primary didn’t receive enough PREPAREOK messages,
+                            // If the primary didn't receive enough PREPAREOK messages,
                             // it drops the request and re-sends the response.
                             Ok(())
                         }
