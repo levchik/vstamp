@@ -15,21 +15,34 @@ struct DeleteCmd {
     key: Bytes,
 }
 
+/// A record in key-value database, any key can have or not have a value.
 #[derive(Debug)]
 pub struct KVEntry {
-    pub key: Vec<u8>,
-    pub value: Option<Vec<u8>>,
+    pub key: Bytes,
+    pub value: Option<Bytes>,
 }
 
+/// A key-value database, guarded by a Mutex with Arc.
+/// Defined here just for convenience.
 pub(crate) type GuardedKVApp = Arc<Mutex<KVApp>>;
 
+/// A key-value database, which data is stored in simple Vec
 #[derive(Debug)]
 pub struct KVApp {
     data: Vec<KVEntry>,
+    /// This is size of all data in database, calculated after each operation
     size: usize,
 }
 
 impl KVApp {
+    /// Returns a new key-value database
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use vstamp::KVApp;
+    /// let app = KVApp::new();
+    /// ```
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
@@ -37,6 +50,18 @@ impl KVApp {
         }
     }
 
+    /// Applies a command to the database as Bytes, runs command and returns the result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bytes::Bytes;
+    /// use vstamp::KVApp;
+    /// let mut app = KVApp::new();
+    /// let set_op = Bytes::from_static("S KEY VALUE".as_ref());
+    /// let set_result = app.apply(set_op);
+    /// assert_eq!(set_result, Bytes::from_static("VALUE".as_ref()));
+    /// ```
     pub fn apply(&mut self, request: Bytes) -> Bytes {
         let request_str = std::str::from_utf8(&*request).unwrap().to_string();
         let parts: Vec<String> =
@@ -46,12 +71,12 @@ impl KVApp {
         match cmd_symbol {
             "S" => {
                 let cmd = self.parse_set(parts);
-                self.set(&*cmd.key, &*cmd.value);
-                Bytes::from(cmd.value)
+                self.set(cmd.key, cmd.value.clone());
+                cmd.value
             }
             "G" => {
                 let cmd = self.parse_get(parts);
-                match self.get(&*cmd.key) {
+                match self.get(cmd.key) {
                     Some(entry) => match entry.value.as_ref() {
                         Some(value) => Bytes::from(value.clone()),
                         None => Bytes::from(""),
@@ -61,13 +86,16 @@ impl KVApp {
             }
             "D" => {
                 let cmd = self.parse_delete(parts);
-                self.delete(&*cmd.key);
+                self.delete(cmd.key);
                 Bytes::from_static("".as_ref())
             }
             _ => unimplemented!(),
         }
     }
 
+    /// Parses a SET command from a vector of strings into a SetCmd struct
+    ///
+    /// Format: S KEY VALUE
     fn parse_set(&mut self, tokens: Vec<String>) -> SetCmd {
         let key = tokens[1].clone();
         let value = tokens[2].clone();
@@ -77,6 +105,9 @@ impl KVApp {
         }
     }
 
+    /// Parses a GET command from a vector of strings into a GetCmd struct
+    ///
+    /// Format: G KEY
     fn parse_get(&mut self, tokens: Vec<String>) -> GetCmd {
         let key = tokens[1].clone();
         GetCmd {
@@ -84,6 +115,9 @@ impl KVApp {
         }
     }
 
+    /// Parses a DELETE command from a vector of strings into a DeleteCmd struct
+    ///
+    /// Format: D KEY
     fn parse_delete(&mut self, tokens: Vec<String>) -> DeleteCmd {
         let key = tokens[1].clone();
         DeleteCmd {
@@ -91,29 +125,36 @@ impl KVApp {
         }
     }
 
+    /// Returns how many records are in the database
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
+    /// Returns actual data from the database as a whole
     pub fn data(&self) -> &[KVEntry] {
         &self.data
     }
 
+    /// Returns the size of the database
     pub fn size(&self) -> usize {
         self.size
     }
 
-    fn get_index(&self, key: &[u8]) -> Result<usize, usize> {
-        self.data.binary_search_by_key(&key, |e| e.key.as_slice())
+    /// Gets index of a key in database
+    fn get_index(&self, key: Bytes) -> Result<usize, usize> {
+        self.data.binary_search_by_key(&key, |e| e.key.clone())
     }
 
-    pub fn set(&mut self, key: &[u8], value: &[u8]) {
+    /// Sets a value to a key in database, updates value if key already exists
+    ///
+    /// Updates size of the database
+    pub fn set(&mut self, key: Bytes, value: Bytes) {
         let entry = KVEntry {
             key: key.to_owned(),
             value: Some(value.to_owned()),
         };
 
-        match self.get_index(key) {
+        match self.get_index(key.clone()) {
             Ok(idx) => {
                 if let Some(v) = self.data[idx].value.as_ref() {
                     if value.len() < v.len() {
@@ -125,18 +166,19 @@ impl KVApp {
                 self.data[idx] = entry;
             }
             Err(idx) => {
-                self.size += key.len() + value.len() + 16;
+                self.size += key.len() + value.len();
                 self.data.insert(idx, entry)
             }
         }
     }
 
-    pub fn delete(&mut self, key: &[u8]) {
+    /// Removes a key from database, updates size of the database
+    pub fn delete(&mut self, key: Bytes) {
         let entry = KVEntry {
             key: key.to_owned(),
             value: None,
         };
-        match self.get_index(key) {
+        match self.get_index(key.clone()) {
             Ok(idx) => {
                 if let Some(value) = self.data[idx].value.as_ref() {
                     self.size -= value.len();
@@ -150,7 +192,8 @@ impl KVApp {
         }
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<&KVEntry> {
+    /// Gets a record from a key in database, returns None if key doesn't exist
+    pub fn get(&self, key: Bytes) -> Option<&KVEntry> {
         if let Ok(idx) = self.get_index(key) {
             return Some(&self.data[idx]);
         }

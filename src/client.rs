@@ -8,6 +8,8 @@ use tracing::{debug, instrument};
 
 /// Established connection with a server.
 /// Requests are issued using the various methods of `Client`.
+///
+/// Those can be requests from client of VR or from replica to replica.
 #[derive(Debug)]
 pub struct Client {
     /// `Connection` allows the handler to operate at the "frame" level and keep
@@ -26,11 +28,15 @@ pub struct Client {
     */
 }
 
-/// Establish a connection with the server located at `addr`.
+/// Establish a connection with the server located at `addr`, sets id for this client.
 ///
-/// `addr` may be any type that can be asynchronously converted to a
-/// `SocketAddr`. This includes `SocketAddr` and strings. The `ToSocketAddrs`
-/// trait is the Tokio version and not the `std` version.
+/// NOTE: Client ID must be unique across all clients of the same VR cluster.
+///       Currently this crate doesn't enforce this.
+///
+/// Sets starting request_id as 0 for this client, after each request made this will be incremented.
+///
+/// `addr` may be any type that can be asynchronously converted to a `SocketAddr`.
+/// This includes `SocketAddr` (from tokio) and strings.
 ///
 /// # Examples
 ///
@@ -39,7 +45,8 @@ pub struct Client {
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let client = match client::connect("127.0.0.1:4627", 1).await {
+///     let client_id = 1;
+///     let client = match client::connect("127.0.0.1:4627", client_id).await {
 ///         Ok(client) => client,
 ///         Err(_) => panic!("failed to establish connection"),
 ///     };
@@ -51,14 +58,11 @@ pub async fn connect<T: ToSocketAddrs>(
     addr: T,
     client_id: u128,
 ) -> crate::Result<Client> {
-    // The `addr` argument is passed directly to `TcpStream::connect`. This
-    // performs any asynchronous DNS lookup and attempts to establish the TCP
+    // Performs any asynchronous DNS lookup and attempts to establish the TCP
     // connection. An error at either step returns an error, which is then
     // bubbled up to the caller of connect.
     let socket = TcpStream::connect(addr).await?;
 
-    // Initialize the connection state. This allocates read/write buffers to
-    // perform protocol frame parsing.
     let connection = Connection::new(socket);
 
     Ok(Client {
@@ -69,11 +73,14 @@ pub async fn connect<T: ToSocketAddrs>(
 }
 
 impl Client {
-    /// Request a command to the server
+    /// Request a command to the server.
+    ///
+    /// This should be used only by clients of VR and not by replicas! TODO: enforce this.
+    ///
+    /// Per VR paper: A client is allowed to have just one outstanding request at a time.
+    /// TODO: This is not enforced just yet.
     ///
     /// # Examples
-    ///
-    /// Demonstrates basic usage.
     ///
     /// ```no_run
     /// use bytes::Bytes;
@@ -89,17 +96,11 @@ impl Client {
     /// ```
     #[instrument(skip(self))]
     pub async fn request(&mut self, op: Bytes) -> crate::Result<Reply> {
-        /*
-        TODO:
-            A client is allowed to have just one outstanding request at a time.
-        */
         self.request_id += 1;
         let frame = Request::new(self.id, self.request_id, op).into_frame();
 
         debug!(request = ?frame);
 
-        // Write the frame to the socket. This writes the full frame to the
-        // socket, waiting if necessary.
         self.connection.write_frame(&frame).await?;
 
         // TODO:
@@ -112,6 +113,7 @@ impl Client {
         }
     }
 
+    /// Sends PREPARE command, waits for PREPARE_OK command in response.
     pub async fn prepare(
         &mut self,
         command: Prepare,
@@ -120,8 +122,6 @@ impl Client {
 
         debug!(request = ?frame);
 
-        // Write the frame to the socket. This writes the full frame to the
-        // socket, waiting if necessary.
         self.connection.write_frame(&frame).await?;
 
         // Wait for the response from the server
@@ -131,6 +131,7 @@ impl Client {
         }
     }
 
+    /// Sends COMMIT command, doesn't wait for command in response.
     pub async fn commit(&mut self, command: Commit) -> crate::Result<()> {
         let frame = command.into_frame();
 
@@ -142,6 +143,7 @@ impl Client {
         Ok(())
     }
 
+    /// Reads a response from the server, it will be either a Frame or Error.
     async fn read_response(&mut self) -> crate::Result<Frame> {
         let response = self.connection.read_frame().await?;
 

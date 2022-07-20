@@ -7,6 +7,8 @@ use tokio::io::{self, AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 use tracing::{debug, info};
 
+/// Connection state.
+/// This allocates read/write buffers to perform protocol frame parsing.
 #[derive(Debug)]
 pub struct Connection {
     stream: BufWriter<TcpStream>,
@@ -14,6 +16,9 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// New Connection with a reference to the underlying TCP stream.
+    ///
+    /// Reasonable defaults should be used for the buffer size. TODO: make it configurable.
     pub fn new(stream: TcpStream) -> Self {
         const BUFFER_SIZE: usize = 1024;
         Connection {
@@ -30,7 +35,6 @@ impl Connection {
             // enough data has been buffered, the frame is
             // returned.
             if let Some(frame) = self.parse_frame()? {
-                // TODO: Reset timer that sends COMMIT messages.
                 return Ok(Some(frame));
             }
 
@@ -54,22 +58,22 @@ impl Connection {
     }
 
     /// Write a frame to the connection.
+    /// This writes the full frame to the socket, waiting if necessary.
+    ///
+    /// We don't raise an error here because we don't want to fail the whole thread.
+    /// TODO: implement timeouts with ability to act from caller, it should decide what to do next
     pub(crate) async fn write_frame(
         &mut self,
         frame: &Frame,
     ) -> io::Result<()> {
         let frame_bytes = frame.unparse().unwrap();
-        // Now, we write frame_bytes into self.stream asynchronously
-        // and await the result.
         self.stream.write_all(&frame_bytes).await?;
-
-        // frame_bytes.write_buf(&mut self.stream).await.expect("Could not write frame");
         self.stream.flush().await?;
         Ok(())
     }
 
+    /// From our buffer try to parse bytes as a full Frame
     fn parse_frame(&mut self) -> Result<Option<Frame>> {
-        info!("Parsing frame");
         // Create the `T: Buf` type.
         let mut buf = Cursor::new(&self.buffer[..]);
 

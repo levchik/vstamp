@@ -10,37 +10,7 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 use tracing::{debug, info};
 
-#[derive(Debug)]
-pub enum CommandError {
-    PrepareOkTimeout,
-    Other(crate::Error),
-}
-
-impl From<String> for CommandError {
-    fn from(src: String) -> CommandError {
-        CommandError::Other(src.into())
-    }
-}
-
-impl From<&str> for CommandError {
-    fn from(src: &str) -> CommandError {
-        src.to_string().into()
-    }
-}
-
-impl Error for CommandError {}
-
-impl fmt::Display for CommandError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CommandError::PrepareOkTimeout => {
-                "Didn't receive PrepareOk response in a timely manner".fmt(fmt)
-            }
-            CommandError::Other(err) => err.fmt(fmt),
-        }
-    }
-}
-
+/// These are mostly broadcast commands, since manager makes requests to all replicas.
 #[derive(Debug)]
 pub enum ManagerCommand {
     BroadcastPrepare {
@@ -50,32 +20,48 @@ pub enum ManagerCommand {
     BroadcastCommit {
         command: Commit,
     },
-    Emtpy,
 }
 
+/// This is convenience type for sending responses back to the caller
 type Responder<T> = oneshot::Sender<crate::Result<T>>;
 
+/// This struct is responsible for talking to all replicas and coordinating the requests.
+/// Mostly used for broadcasting commands but maybe later for sending requests to specific replicas.
 #[derive(Debug)]
 pub struct ReplicaManager {
-    manager: JoinHandle<()>,
     pub(crate) mpsc_tx: Sender<ManagerCommand>,
 }
 
 impl ReplicaManager {
+    /// Create a new ReplicaManager, which will send commands to all replicas in replicas_addresses
+    ///
+    /// MPSC_CHANNEL_BUFFER is the size of the channel used to send commands to the replicas.
+    /// This should be large enough to handle large numbers of simultaneous commands.
+    /// TODO: make MPSC_CHANNEL_BUFFER configurable.
     pub fn new(replicas_addresses: Vec<String>) -> Self {
         const MPSC_CHANNEL_BUFFER: usize = 16;
         let (mpsc_tx, mut mpsc_rx) = mpsc::channel(MPSC_CHANNEL_BUFFER);
 
-        let manager = tokio::spawn(async move {
+        // TODO: maybe we need to shutdown it manually
+        tokio::spawn(async move {
+            // After connecting to all replicas, this will hold all the clients for sending cmds.
             let mut clients = Vec::new();
+
             // Just high enough number to specify leader's client_id
             let client_id: u128 = 999_999_999_999_999_999u128.to_be();
+
+            // We try to connect to all replicas, but after some time we give up and panic.
+            // Retry is using exponential backoff, so that we don't spam the replicas.
+            // Later this panic propagates up and shuts down the server, since if we can't talk
+            // to other replicas it's pointless to keep running.
+            // TODO: check for multiple replica connection in parallel
             for replica_address in replicas_addresses.iter() {
-                // TODO: check for multiple replica connection in parallel
+                // TODO: Whole retry thing should be configurable.
                 const MAX_RETRIES: usize = 5;
                 let retry_strategy = ExponentialBackoff::from_millis(10)
                     .map(jitter)
                     .take(MAX_RETRIES);
+
                 info!("Trying to connect to other replicas...");
                 info!(
                     "Waiting at most 60 seconds for replicas to be ready..."
@@ -90,10 +76,18 @@ impl ReplicaManager {
                 ));
                 clients.push(result);
             }
-            debug!("Connected to other replicas {:?}", replicas_addresses);
+
+            // This is the main loop of the manager.
+            // It will listen to all commands on the channel and send them to all replicas.
+            // It will also listen to all responses from the replicas and send them back
+            // to the caller using responder channel if it is present in command.
+            info!("Connected to replicas {:?}", replicas_addresses);
             while let Some(cmd) = mpsc_rx.recv().await {
                 match cmd {
                     ManagerCommand::BroadcastPrepare { command, resp_tx } => {
+                        // Here we use FuturesUnordered to send the command to all replicas and
+                        // react when any of them responds, we count quorum responses and after
+                        // that we send the response to the caller.
                         let mut tasks = FuturesUnordered::new();
                         debug!("Broadcasting prepare command");
                         for client in clients.iter_mut() {
@@ -103,14 +97,13 @@ impl ReplicaManager {
                             "Sent {} requests, waiting for responses",
                             tasks.len()
                         );
-                        // TODO: this will change when we implement cluster config change
+
+                        // Minimum number of responses required for quorum
                         let f_size = tasks.len() / 2;
+
                         let mut responses_replicas = Vec::new();
                         while let Some(result) = tasks.next().await {
-                            // TODO: Err(CommandError::PrepareOkTimeout)
-                            debug!("result arrived: {:?}", result);
-
-                            // Validate the result
+                            debug!("PREPAREOK response arrived: {:?}", result);
                             match result {
                                 Ok(prepare_ok) => responses_replicas
                                     .push(prepare_ok.replica_number),
@@ -123,11 +116,11 @@ impl ReplicaManager {
 
                             // Validate quorum
                             if responses_replicas.len() >= f_size {
-                                debug!("Quorum responses came back, sending to resp_tx");
+                                debug!("Quorum PREPAREOK responses came back, sending to resp_tx");
                                 let _ = resp_tx.send(Ok(()));
                                 // TODO: we don't need to wait for others to conclude that
-                                // quorum has been reached, but we need to wait for others to
-                                // validate them & possibly tell them that they are failing???
+                                //   quorum has been reached, but we need to wait for others to
+                                //   validate them & possibly tell them that they are failing???
                                 break;
                             }
                         }
@@ -141,12 +134,10 @@ impl ReplicaManager {
                                 .expect("Sending commit failed");
                         }
                     }
-                    ManagerCommand::Emtpy => {}
                 }
             }
         });
 
-        Self { mpsc_tx, manager }
-        // TODO: on shutdown manager.await.unwrap(); for every backup_client
+        Self { mpsc_tx }
     }
 }

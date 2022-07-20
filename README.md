@@ -4,6 +4,8 @@
 **WARNING: This is a work in progress.**
 
 It is a Rust library for building replicated services that use viewstamp replication protocol.
+Inspired by [mini-redis](https://github.com/tokio-rs/mini-redis/).
+
 Additionally, I included a Rust server with a simple key-value DB app **(ability to pass your own app is WIP)** to check correctness & demonstrate the use of the library.
 
 I strive to be as much compliant with original paper [Viewstamped Replication Revisited](https://pmg.csail.mit.edu/papers/vr-revisited.pdf) as possible.
@@ -13,6 +15,16 @@ This includes naming of structures, commands, and fields.
 
 ```sh
 cargo build
+```
+
+## Testing
+
+Since our integration tests run actual servers, they occupy real ports.
+
+They will clush if run in parallel, so you should run them in sequence for now.
+
+```sh
+cargo test -- --test-threads=1
 ```
 
 ## Run servers
@@ -50,6 +62,7 @@ You must specify which server address you want to occupy by passing the `--index
 - [x] Ability to run servers and send request to them
 - [x] Basic tests that show operations are applied correctly to KV store
 - [x] Use parking_lot::Mutex as a faster alternative to std::sync::Mutex
+- [ ] Ability to run integration tests to them in parallel
 - [ ] Design & implement API for checking replicas state
 - [ ] Use some crate for Errors (currently they are very clunky)
 - [ ] (paper) View change protocol

@@ -39,6 +39,10 @@ impl Prepare {
         Frame::Prepare(self)
     }
 
+    /// Replicas only process normal protocol messages containing a view-number
+    /// that matches the view-number they know.
+    /// If the sender is behind, the receiver drops the message.
+    /// If the sender is ahead, the replica performs a state transfer.
     #[instrument(skip(self, replica, dst))]
     pub(crate) async fn apply(
         &self,
@@ -46,12 +50,6 @@ impl Prepare {
         dst: &mut Connection,
         app: &GuardedKVApp,
     ) -> crate::Result<()> {
-        /*
-        Replicas only process normal protocol messages containing a view-number
-        that matches the view-number they know.
-        If the sender is behind, the receiver drops the message.
-        If the sender is ahead, the replica performs a state transfer.
-        */
         match replica.ensure_same_view(self.view_number) {
             Err(e) => {
                 match e {

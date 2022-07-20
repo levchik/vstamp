@@ -5,6 +5,59 @@ use std::io::Cursor;
 use std::num::TryFromIntError;
 use std::string::FromUtf8Error;
 
+/*
+   This is the protocol for the servers and clients communication:
+
+   Request
+   +<client_id>\r\n<request_id>\r\n<operation>\r\n
+
+   Reply
+   -<view_number>\r\n<request_id>\r\n<response>\r\n
+
+   Prepare
+   ><view_number>\r\n<op_number>\r\n<commit_number>\r\n<client_id>\r\n<request_id>\r\n<operation>\r\n
+
+   PrepareOk
+   <<view_number>\r\n<op_number>\r\n<replica_number>\r\n
+
+   Commit
+   !<view_number>\r\n<commit_number>\r\n
+
+   StartViewChange
+   @<view_number>\r\n<replica_number>\r\n
+
+   DoViewChange
+   #<view_number>\r\n<replica_number>\r\n<log>\r\n<last_normal_view_number>\r\n<op_number>\r\n<commit_number>\r\n
+
+   StartView
+   $<view_number>\r\n<log>\r\n<op_number>\r\n<commit_number>\r\n
+
+   Recovery
+   %<replica_number>\r\n<nonce>\r\n
+
+   RecoveryResponse
+   &<replica_number>\r\n<nonce>\r\n<log>\r\n<op_number>\r\n<commit_number>\r\n
+
+   GetState
+   ^<replica_number>\r\n<view_number>\r\n<op_number>\r\n
+
+   NewState
+   *<view_number>\r\n<op_number>\r\n<log>\r\n<commit_number>\r\n
+
+   Reconfiguration
+   ~<epoch_number>\r\n<client_id>\r\n<request_id>\r\n<replicas_addresses>\r\n
+
+   StartEpoch
+   ;<epoch_number>\r\n<op_number>\r\n<old_replicas_addresses>\r\n<new_replicas_addresses>\r\n
+
+   EpochStarted
+   :<epoch_number>\r\n<replica_number>\r\n
+
+   CheckEpoch
+   ,<client_id>\r\n<epoch_number>\r\n<request_id>\r\n
+*/
+
+/// Errors when parsing bytes into a Reply
 #[derive(Debug)]
 pub enum Error {
     Incomplete,
@@ -51,6 +104,7 @@ impl fmt::Display for Error {
     }
 }
 
+/// A protocol message to be sent over the network
 #[derive(Clone, Debug)]
 pub enum Frame {
     Request(Request),
@@ -58,6 +112,8 @@ pub enum Frame {
     Prepare(Prepare),
     PrepareOk(PrepareOk),
     Commit(Commit),
+    /// Below are messages that will get their respective command structs
+    /// TODO: Those are not implemented yet
     StartViewChange {
         view_number: u128,
         replica_number: u8,
@@ -169,55 +225,6 @@ impl Frame {
 
     /// The message has already been validated
     pub fn parse(src: &mut Cursor<&[u8]>) -> Result<Frame, Error> {
-        /*
-        Request
-        +<client_id>\r\n<request_id>\r\n<operation>\r\n
-
-        Reply
-        -<view_number>\r\n<request_id>\r\n<response>\r\n
-
-        Prepare
-        ><view_number>\r\n<op_number>\r\n<commit_number>\r\n<client_id>\r\n<request_id>\r\n<operation>\r\n
-
-        PrepareOk
-        <<view_number>\r\n<op_number>\r\n<replica_number>\r\n
-
-        Commit
-        !<view_number>\r\n<commit_number>\r\n
-
-        StartViewChange
-        @<view_number>\r\n<replica_number>\r\n
-
-        DoViewChange
-        #<view_number>\r\n<replica_number>\r\n<log>\r\n<last_normal_view_number>\r\n<op_number>\r\n<commit_number>\r\n
-
-        StartView
-        $<view_number>\r\n<log>\r\n<op_number>\r\n<commit_number>\r\n
-
-        Recovery
-        %<replica_number>\r\n<nonce>\r\n
-
-        RecoveryResponse
-        &<replica_number>\r\n<nonce>\r\n<log>\r\n<op_number>\r\n<commit_number>\r\n
-
-        GetState
-        ^<replica_number>\r\n<view_number>\r\n<op_number>\r\n
-
-        NewState
-        *<view_number>\r\n<op_number>\r\n<log>\r\n<commit_number>\r\n
-
-        Reconfiguration
-        ~<epoch_number>\r\n<client_id>\r\n<request_id>\r\n<replicas_addresses>\r\n
-
-        StartEpoch
-        ;<epoch_number>\r\n<op_number>\r\n<old_replicas_addresses>\r\n<new_replicas_addresses>\r\n
-
-        EpochStarted
-        :<epoch_number>\r\n<replica_number>\r\n
-
-        CheckEpoch
-        ,<client_id>\r\n<epoch_number>\r\n<request_id>\r\n
-         */
         match get_u8(src)? {
             b'+' => {
                 let client_id = get_decimal(src)?;
@@ -280,6 +287,7 @@ impl Frame {
         }
     }
 
+    /// Translate this Frame into Bytes so that it can be sent over the network
     pub fn unparse(&self) -> Result<Bytes, Error> {
         match self {
             Frame::Request(request) => {
@@ -447,6 +455,7 @@ impl fmt::Display for Frame {
     }
 }
 
+/// Get first byte, advances the cursor
 fn get_u8(src: &mut Cursor<&[u8]>) -> Result<u8, Error> {
     if !src.has_remaining() {
         return Err(Error::Incomplete);

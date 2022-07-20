@@ -111,8 +111,7 @@ struct Handler {
 /// When this limit is reached, the server will stop accepting connections until
 /// an active connection terminates.
 ///
-/// A real application will want to make this value configurable, but for this
-/// example, it is hard coded.
+/// TODO: make this configurable.
 const MAX_CONNECTIONS: usize = 250;
 
 /// Run the server.
@@ -136,6 +135,7 @@ pub async fn run(
         default_panic(info);
         std::process::exit(1);
     }));
+
     // When the provided `shutdown` future completes, we must send a shutdown
     // message to all active connections. We use a broadcast channel for this
     // purpose. The call below ignores the receiver of the broadcast pair, and when
@@ -148,8 +148,8 @@ pub async fn run(
     // Timer gets reset if any client sends us any request since we do PREPARE
     let (commit_timer_tx, mut commit_timer_rx) = mpsc::channel(1);
 
+    // Initialize some variables here before passing them into background task & later in Listener
     let backup_addresses = replica_config.get_backup_addresses();
-
     let replica_holder = ReplicaDropGuard::new(replica_config);
     let replica = replica_holder.replica();
     let manager = ReplicaManager::new(backup_addresses);
@@ -168,10 +168,9 @@ pub async fn run(
         commit_timer_tx,
     };
 
-    /*
-    If the primary does not receive a new client request in a timely way, it
-    instead informs the backups of the latest commit by sending them a COMMIT message.
-    */
+    // If the primary does not receive a new client request in a timely way, it
+    // instead informs the backups of the latest commit by sending them a COMMIT message.
+    // TODO: make COMMIT_TIMER_INTERVAL configurable.
     const COMMIT_TIMER_INTERVAL: Duration = Duration::from_secs(2);
     tokio::spawn(async move {
         let mut interval = time::interval(COMMIT_TIMER_INTERVAL);
@@ -179,7 +178,8 @@ pub async fn run(
         loop {
             let _ = tokio::select! {
                 _ = interval.tick() => {
-                    // If this is PRIMARY replica & in NORMAL status
+                    // If this is PRIMARY replica & in NORMAL status,
+                    // send this periodic COMMIT message to all backups.
                     if replica.is_primary_and_normal() {
                         manager_tx.send(ManagerCommand::BroadcastCommit {
                             command: Commit {
@@ -192,7 +192,8 @@ pub async fn run(
                     }
                 },
                 _ = commit_timer_rx.recv() => {
-                    // The client gave us request, so we can reset the timer
+                    // We received a request from any client, so we can reset the timer,
+                    // since we'll send PREPARE to backups anyway.
                     interval.reset();
                 }
             };
@@ -242,8 +243,6 @@ pub async fn run(
     // `Sender` instances are held by connection handler tasks. When those drop,
     // the `mpsc` channel will close and `recv()` will return `None`.
     let _ = shutdown_complete_rx.recv().await;
-
-    // TODO: drop mpsx for every client and oneshots here?
 
     Ok(())
 }
@@ -306,12 +305,10 @@ impl Listener {
                 // Receive shutdown notifications.
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
 
-                // Notifies the receiver half once all clones are
-                // dropped.
+                // Notifies the receiver half once all clones are dropped.
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
 
-                // Notifies the receiver half once all clones are
-                // dropped.
+                // Notifies the timer task that a we received a request from a client.
                 commit_timer_tx: self.commit_timer_tx.clone(),
             };
 
@@ -372,11 +369,11 @@ impl Handler {
         // As long as the shutdown signal has not been received, try to read a
         // new request frame.
         while !self.shutdown.is_shutdown() {
-            // While reading a request frame, also listen for the shutdown
-            // signal.
+            // While reading a request frame, also listen for the shutdown signal.
             let maybe_frame = tokio::select! {
                 res = self.connection.read_frame() => {
                     // If we got a frame from a client, it's ok not to send COMMIT to replicas
+                    // TODO: there are administrative cmds from client, those must be filtered out
                     let _ = self.commit_timer_tx.send(()).await?;
                     res?
                 },
@@ -394,7 +391,7 @@ impl Handler {
                 Some(frame) => frame,
                 None => return Ok(()),
             };
-            info!(frame = ?frame, "received request frame");
+            debug!(frame = ?frame, "received request frame");
 
             // Convert the frame into a command struct. This returns an
             // error if the frame is not a valid command or it is an

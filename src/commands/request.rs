@@ -27,6 +27,7 @@ impl Request {
         Frame::Request(self)
     }
 
+    /// Primary handles request from client
     #[instrument(skip(self, replica, dst, app))]
     pub(crate) async fn apply(
         &self,
@@ -35,25 +36,20 @@ impl Request {
         manager_sender: &Sender<ManagerCommand>,
         app: &GuardedKVApp,
     ) -> crate::Result<()> {
-        /*
-        Replicas participate in processing of client requests only when their status is normal.
-        This constraint is critical for correctness!
-        */
+        // Replicas participate in processing of client requests only when their status is normal.
+        // This constraint is critical for correctness!
         if replica.ensure_normal_status().is_err() {
             // Drop request to tell client, that it needs to either try later or find new leader
             return Ok(());
         }
-
-        /*
-        When the primary receives the request, it compares the request-number in the request
-        with the information in the client table.
-
-        If the request-number isn’t bigger than the information in the table it drops the request,
-        but it will re-send the response if the request is the most recent one from this client
-        and it has already been executed.
-        */
         // TODO: check if we are primary now?
 
+        // When the primary receives the request, it compares the request-number in the request
+        // with the information in the client table.
+        //
+        // If the request-number isn’t bigger than the information in the table it drops the request,
+        // but it will re-send the response if the request is the most recent one from this client
+        // and it has already been executed.
         let maybe_stored_reply = replica
             .check_for_existing_reply(&self.client_id, &self.request_id);
 
