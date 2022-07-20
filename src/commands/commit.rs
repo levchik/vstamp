@@ -34,12 +34,41 @@ impl Commit {
         app: &GuardedKVApp,
     ) -> crate::Result<()> {
         /*
-        When a backup learns of a commit, it waits until it has the request in its log (which may require
-        state transfer) and until it has executed all earlier
-        operations. Then it executes the operation by performing the up-call to the service code, increments
-        its commit-number, updates the client’s entry in the
-        client-table, but does not send the reply to the client.
+        Replicas only process normal protocol messages containing a view-number
+        that matches the view-number they know.
+        If the sender is behind, the receiver drops the message.
+        If the sender is ahead, the replica performs a state transfer.
         */
-        Ok(())
+        match replica.ensure_same_view(self.view_number) {
+            Err(e) => {
+                match e {
+                    ReplicaError::ViewNumberBehind => {
+                        debug!("Replica is ahead, dropping Prepare");
+                        return Ok(());
+                    }
+                    ReplicaError::ViewNumberAhead => {
+                        debug!("Replica is behind, drop & performing state transfer");
+                        return Ok(());
+                    }
+                    _ => {
+                        panic!("Unexpected replica error when checking view number: {:?}", e)
+                    }
+                }
+            }
+            Ok(_) => {
+                let current_commit_number = replica.get_commit_number();
+                if self.commit_number > current_commit_number {
+                    replica.process_up_to_commit(app, self.commit_number);
+                } else {
+                    // Replica received a PREPARE message with a commit-number that is
+                    // less than or equal to its current commit-number.
+                    // Most often that means that primary has not committed this request.
+                    // It might be a duplicate, or it might mean that requester was offline
+                    // for quite a while, and it got behind.
+                    debug!("Replica has nothing to apply, commit is equal or less than current commit");
+                }
+                Ok(())
+            }
+        }
     }
 }

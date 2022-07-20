@@ -1,4 +1,3 @@
-use std::borrow::BorrowMut;
 use crate::{Command, Connection, Replica, Shutdown};
 use crate::app::{GuardedKVApp, KVApp};
 use crate::commands::Commit;
@@ -6,11 +5,9 @@ use crate::manager::{ManagerCommand, ReplicaManager};
 use crate::replica::{ReplicaConfig, ReplicaDropGuard};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use futures::stream;
-use futures::StreamExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc, oneshot, Semaphore};
-use tokio::time::{self, Duration, Instant};
+use tokio::sync::{broadcast, mpsc, Semaphore};
+use tokio::time::{self, Duration};
 use tracing::{debug, error, info, instrument};
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
@@ -168,12 +165,13 @@ pub async fn run(
     If the primary does not receive a new client request in a timely way, it
     instead informs the backups of the latest commit by sending them a COMMIT message.
     */
-    let timer = tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_secs(2));
+    const COMMIT_TIMER_INTERVAL: Duration = Duration::from_secs(2);
+    tokio::spawn(async move {
+        let mut interval = time::interval(COMMIT_TIMER_INTERVAL);
         interval.tick().await;
         loop {
             let _ = tokio::select! {
-                r = interval.tick() => {
+                _ = interval.tick() => {
                     // If this is PRIMARY replica & in NORMAL status
                     if replica.is_primary_and_normal() {
                         debug!("Sending COMMIT to replicas");
@@ -185,7 +183,7 @@ pub async fn run(
                         });
                     }
                 },
-                s = commit_timer_rx.recv() => {
+                _ = commit_timer_rx.recv() => {
                     // The client gave us request, so we can reset the timer
                     interval.reset();
                 }

@@ -67,7 +67,7 @@ impl Request {
 
                     // TODO: these all could be under just one lock
                     replica.advance_op_number();
-                    replica.append_to_log(self.operation.clone());
+                    replica.append_to_log(self.client_id, self.request_id,self.operation.clone());
                     replica.insert_to_client_table(
                         &self.client_id,
                         &self.request_id,

@@ -58,7 +58,7 @@ async fn spawn_servers(n: usize, delay: u64) -> (Vec<JoinHandle<vstamp::Result<(
     (servers, replicas_addresses)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn server_saves_app_state_between_client_calls() {
     let (servers, replicas_addresses) = spawn_servers(3, 1).await;
     let addr = replicas_addresses[0].clone();

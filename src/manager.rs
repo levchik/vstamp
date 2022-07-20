@@ -118,7 +118,7 @@ impl ReplicaManager {
                     }
                     ManagerCommand::BroadcastCommit { command } => {
                         for client in clients.iter_mut() {
-                            client.commit(command.clone()).await;
+                            client.commit(command.clone()).await.expect("Sending commit failed");
                         }
                     }
                     ManagerCommand::Emtpy => {}

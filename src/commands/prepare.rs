@@ -3,6 +3,7 @@ use crate::replica::ReplicaError;
 use crate::{Connection, Frame, Replica};
 use bytes::Bytes;
 use tracing::{debug, instrument};
+use tracing::field::debug;
 use crate::app::GuardedKVApp;
 
 #[derive(Debug, Clone)]
@@ -95,33 +96,23 @@ impl Prepare {
                     },
                     Ok(_) => {
                         replica.advance_op_number();
-                        replica.append_to_log(self.operation.clone());
+                        replica.append_to_log(self.client_id, self.request_id,self.operation.clone());
                         replica.insert_to_client_table(
                             &self.client_id,
                             &self.request_id,
                         );
 
-                        //                         if self.commit_number > replica.commit_number {
-                        //     replica.set_commit_number(self.commit_number);
-                        //     replica.commit_to_log();
-                        // } else {
-                        //     // Replica received a PREPARE message with a commit-number that is
-                        //     // less than or equal to its current commit-number.
-                        //     // It might be a duplicate, or it might mean that requester was offline
-                        //     // for quite a while, and it got behind.
-                        //     // In either case, this is a violation of the protocol, and the
-                        //     // replica should drop the message.
-                        //     Ok(())
-                        // }
-                        // for commit in replica.get_commit_number()..self.commit_number {
-                        //
-                        // }
-                        // let response = app
-                        //     .lock()
-                        //     .unwrap()
-                        //     .apply(self.operation.clone());
-                        // replica.advance_commit_number();
-
+                        let current_commit_number = replica.get_commit_number();
+                        if self.commit_number > current_commit_number {
+                            replica.process_up_to_commit(app, self.commit_number);
+                        } else {
+                            // Replica received a PREPARE message with a commit-number that is
+                            // less than or equal to its current commit-number.
+                            // Most often that means that primary has not committed this request.
+                            // It might be a duplicate, or it might mean that requester was offline
+                            // for quite a while, and it got behind.
+                            debug!("Replica has nothing to apply, commit is equal or less than current commit");
+                        }
                         let prepare_ok = PrepareOk::new(
                             self.view_number,
                             self.op_number,

@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use tracing::{debug, info};
+use crate::app::GuardedKVApp;
 
 #[derive(Debug)]
 pub enum ReplicaError {
@@ -182,7 +184,7 @@ impl ClientTable {
                 match &client_table_record.2 {
                     // If it's already been executed -> resend Frame
                     Some(reply) => Ok(Some(reply.clone())),
-                    // TODO: If it isn't been executed -> drop it?
+                    // TODO: If it hasn't been executed -> drop it?
                     None => Err(ClientError::StaleRequestId),
                 }
             } else {
@@ -204,14 +206,24 @@ enum ReplicaStatus {
     Transitioning,
 }
 
+// (<client_id>, <request_id>, <operation>)
+#[derive(Debug, Clone)]
+pub(crate) struct ReplicaLogEntry(u128, u128, Bytes);
+
+impl ReplicaLogEntry {
+    pub(crate) fn new(client_id: u128, request_id: u128, operation: Bytes) -> Self {
+        Self(client_id, request_id, operation)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ReplicaLog {
-    operations: Vec<Bytes>,
+    operations: Vec<ReplicaLogEntry>,
 }
 
 impl ReplicaLog {
-    pub fn append(&mut self, operation: Bytes) {
-        let _ = &self.operations.push(operation);
+    pub fn append(&mut self, client_id: u128, request_id: u128, operation: Bytes) {
+        let _ = &self.operations.push(ReplicaLogEntry::new(client_id, request_id, operation));
     }
 }
 
@@ -335,9 +347,9 @@ impl Replica {
         info.status == ReplicaStatus::Normal && info.state.replica_number == 0
     }
 
-    pub fn append_to_log(&self, operation: Bytes) {
+    pub fn append_to_log(&self, client_id: u128, request_id: u128, operation: Bytes) {
         let mut info = self.info.lock().unwrap();
-        info.state.log.append(operation)
+        info.state.log.append(client_id, request_id, operation)
     }
 
     pub fn ensure_normal_status(&self) -> Result<(), ClientError> {
@@ -375,6 +387,35 @@ impl Replica {
             Err(ReplicaError::OpNumberAhead)
         } else {
             Ok(())
+        }
+    }
+
+    pub fn process_up_to_commit(&self, app: &GuardedKVApp, commit_number: u128) {
+        // When a backup learns of a commit, it ensures it had executed all earlier operations.
+        // Then it executes the operation by performing the up-call to the service code, increments
+        // its commit-number.
+        debug!("Processing up to commit number {}", commit_number);
+        let mut info = self.info.lock().unwrap();
+        let mut current_commit_number = info.state.commit_number;
+        while current_commit_number < commit_number {
+            let operation = info.state.log.operations[current_commit_number as usize].clone();
+            let response = app
+                .lock()
+                .unwrap()
+                .apply(operation.2);
+            let reply = Reply::new(
+                info.state.view_number,
+                operation.1,
+                response,
+            );
+            current_commit_number = info.state.advance_commit_number();
+            // The server also updates the client’s
+            // entry in the client-table to contain the result.
+            info.state.client_table.update_with_reply(
+                &operation.0,
+                &operation.1,
+                &reply,
+            );
         }
     }
 

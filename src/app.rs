@@ -1,6 +1,4 @@
 use bytes::Bytes;
-use std::borrow::Borrow;
-use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 struct SetCmd {
@@ -38,7 +36,7 @@ impl KVApp {
         }
     }
 
-    pub fn apply(&mut self, mut request: Bytes) -> Bytes {
+    pub fn apply(&mut self, request: Bytes) -> Bytes {
         let request_str = std::str::from_utf8(&*request).unwrap().to_string();
         let parts: Vec<String> =
             request_str.split_whitespace().map(String::from).collect();
