@@ -47,12 +47,12 @@ Otherwise, you can specify the path to the configuration file by passing the `--
 
 You must specify which server address you want to occupy by passing the `--index` flag, which is 0-based index of replica address in the configuration file.
     
-    ```sh
-    cp server-config-example.yaml server-config.yaml
-    ./target/debug/vstamp-server --index 0
-    ./target/debug/vstamp-server --index 1
-    ./target/debug/vstamp-server --index 2
-    ```
+```sh
+cp server-config-example.yaml server-config.yaml
+./target/debug/vstamp-server --index 0
+./target/debug/vstamp-server --index 1
+./target/debug/vstamp-server --index 2
+```
 
 ## Roadmap
 
