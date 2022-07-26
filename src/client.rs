@@ -1,6 +1,7 @@
 use crate::commands::{Commit, Prepare, PrepareOk, Reply, Request};
 use crate::{Connection, Frame};
 
+use crate::app::SetCmd;
 use bytes::Bytes;
 use std::io::{Error, ErrorKind};
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -113,18 +114,30 @@ impl Client {
         }
     }
 
-    /// Sends PREPARE command, waits for PREPARE_OK command in response.
-    pub async fn prepare(
+    /// Sends SET command, waits for Reply in response.
+    pub async fn set(
         &mut self,
-        command: Prepare,
-    ) -> crate::Result<PrepareOk> {
+        key: Bytes,
+        value: Bytes,
+    ) -> crate::Result<Reply> {
+        let command = SetCmd { key, value };
+        let command_bytes = command.into_bytes();
+
+        self.request(command_bytes).await
+    }
+
+    /// Sends PREPARE command doesn't wait for response.
+    pub async fn prepare_send_only(&mut self, command: Prepare) -> crate::Result<()> {
         let frame = command.into_frame();
 
         debug!(request = ?frame);
 
         self.connection.write_frame(&frame).await?;
+        Ok(())
+    }
 
-        // Wait for the response from the server
+    /// Waits for PREPARE_OK command in response.
+    pub async fn prepare_read_response(&mut self) -> crate::Result<PrepareOk> {
         match self.read_response().await? {
             Frame::PrepareOk(prepare_ok) => Ok(prepare_ok),
             frame => Err(frame.to_error()),

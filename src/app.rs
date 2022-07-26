@@ -2,16 +2,26 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-struct SetCmd {
-    key: Bytes,
-    value: Bytes,
+pub struct SetCmd {
+    pub(crate) key: Bytes,
+    pub(crate) value: Bytes,
 }
 
-struct GetCmd {
+impl SetCmd {
+    pub fn into_bytes(self) -> Bytes {
+        Bytes::from(format!(
+            "S {} {}",
+            std::str::from_utf8(&*self.key).unwrap(),
+            std::str::from_utf8(&*self.value).unwrap()
+        ))
+    }
+}
+
+pub struct GetCmd {
     key: Bytes,
 }
 
-struct DeleteCmd {
+pub struct DeleteCmd {
     key: Bytes,
 }
 
@@ -79,15 +89,15 @@ impl KVApp {
                 match self.get(cmd.key) {
                     Some(entry) => match entry.value.as_ref() {
                         Some(value) => Bytes::from(value.clone()),
-                        None => Bytes::from(""),
+                        None => Bytes::new(),
                     },
-                    None => Bytes::from_static("".as_ref()),
+                    None => Bytes::new(),
                 }
             }
             "D" => {
                 let cmd = self.parse_delete(parts);
                 self.delete(cmd.key);
-                Bytes::from_static("".as_ref())
+                Bytes::new()
             }
             _ => unimplemented!(),
         }
@@ -95,13 +105,18 @@ impl KVApp {
 
     /// Parses a SET command from a vector of strings into a SetCmd struct
     ///
-    /// Format: S KEY VALUE
+    /// Format: S KEY <VALUE>
     fn parse_set(&mut self, tokens: Vec<String>) -> SetCmd {
         let key = tokens[1].clone();
-        let value = tokens[2].clone();
-        SetCmd {
-            key: Bytes::from(key),
-            value: Bytes::from(value),
+        match tokens.get(2) {
+            None => SetCmd {
+                key: Bytes::from(key),
+                value: Bytes::new(),
+            },
+            Some(value) => SetCmd {
+                key: Bytes::from(key),
+                value: Bytes::from(value.to_owned()),
+            },
         }
     }
 

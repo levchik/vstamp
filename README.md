@@ -32,7 +32,7 @@ cargo test -- --test-threads=1
 I've built a simple CLI to run servers with minimal configuration.
 So the configuration file is in YAML format, example can be found [here](server-config-example.yaml).
 
-Example of configuration file:
+Format of configuration file:
 
 ```yaml
 replicas_addresses:

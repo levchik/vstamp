@@ -1,6 +1,6 @@
 use crate::client;
 use crate::commands::{Commit, Prepare};
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{future, stream::FuturesUnordered, StreamExt};
 use std::error::Error;
 use std::fmt;
 use tokio::sync::mpsc::Sender;
@@ -85,42 +85,50 @@ impl ReplicaManager {
             while let Some(cmd) = mpsc_rx.recv().await {
                 match cmd {
                     ManagerCommand::BroadcastPrepare { command, resp_tx } => {
-                        // Here we use FuturesUnordered to send the command to all replicas and
-                        // react when any of them responds, we count quorum responses and after
-                        // that we send the response to the caller.
-                        let mut tasks = FuturesUnordered::new();
-                        debug!("Broadcasting prepare command");
+                        debug!("Broadcasting prepare command...");
+                        let mut send_tasks = Vec::new();
                         for client in clients.iter_mut() {
-                            tasks.push(client.prepare(command.clone()))
+                            send_tasks.push(
+                                client.prepare_send_only(command.clone()),
+                            )
                         }
                         debug!(
-                            "Sent {} requests, waiting for responses",
-                            tasks.len()
+                            "Sent {} requests, waiting for responses...",
+                            send_tasks.len()
                         );
+                        let _results = future::join_all(send_tasks).await;
 
+                        // Now we just have to concurrently wait for responses from all replicas.
+                        // If we get more than f_size responses,
+                        // we can send the response back to the caller.
+                        let mut recv_tasks = Vec::new();
+                        for client in clients.iter_mut() {
+                            recv_tasks.push(client.prepare_read_response())
+                        }
                         // Minimum number of responses required for quorum
-                        let f_size = tasks.len() / 2;
+                        let f_size = recv_tasks.len() / 2;
 
-                        let mut responses_replicas = Vec::new();
-                        while let Some(result) = tasks.next().await {
-                            debug!("PREPAREOK response arrived: {:?}", result);
-                            match result {
-                                Ok(prepare_ok) => responses_replicas
-                                    .push(prepare_ok.replica_number),
-                                Err(err) => {
-                                    // TODO: handle error
-                                    debug!("Error: {:?}", err);
-                                    continue;
+                        let mut num_responses = 0;
+                        let unpin_futs: Vec<_> =
+                            recv_tasks.into_iter().map(Box::pin).collect();
+                        let mut futs = unpin_futs;
+
+                        while !futs.is_empty() {
+                            match future::select_all(futs).await {
+                                (Ok(val), _index, remaining) => {
+                                    num_responses += 1;
+                                    futs = remaining;
                                 }
-                            };
-
-                            // Validate quorum
-                            if responses_replicas.len() >= f_size {
+                                (Err(_e), _index, remaining) => {
+                                    // TODO: not ignoring all errors
+                                    futs = remaining;
+                                }
+                            }
+                            if num_responses >= f_size {
                                 debug!("Quorum PREPAREOK responses came back, sending to resp_tx");
-                                let _ = resp_tx.send(Ok(()));
-                                // TODO: we don't need to wait for others to conclude that
-                                //   quorum has been reached, but we need to wait for others to
-                                //   validate them & possibly tell them that they are failing???
+                                resp_tx
+                                    .send(Ok(()))
+                                    .expect("Could not send response");
                                 break;
                             }
                         }
