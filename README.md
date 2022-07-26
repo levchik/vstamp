@@ -11,10 +11,10 @@ Additionally, I included a Rust server with a simple key-value DB app **(ability
 I strive to be as much compliant with original paper [Viewstamped Replication Revisited](https://pmg.csail.mit.edu/papers/vr-revisited.pdf) as possible.
 This includes naming of structures, commands, and fields.
 
-## Building
+## Building server
 
 ```sh
-cargo build
+cargo build --bin vstamp-server
 ```
 
 ## Testing
@@ -52,6 +52,51 @@ cp server-config-example.yaml server-config.yaml
 ./target/debug/vstamp-server --index 0
 ./target/debug/vstamp-server --index 1
 ./target/debug/vstamp-server --index 2
+```
+
+## Building CLI
+
+```sh
+cargo build --bin vstamp-cli
+```
+
+## Using CLI
+
+When you run binary, you'll drop into a REPL. There you can issue commands to kv-store app or (in future releases) manage cluster.
+
+Note that you need a running cluster up and running before you can use the CLI.
+
+```sh
+./target/debug/vstamp-cli
+
+127.0.0.1:14621> SET mykey myvalue
+myvalue
+127.0.0.1:14621> ...
+```
+
+You can type help to see available commands and info about how to use them:
+
+```sh
+127.0.0.1:14621> help
+Available commands:
+    PING    Get a response
+    QUIT    Quit the REPL
+    SET     Set key to a value
+    help    Print this message or the help of the given subcommand(s)
+    
+127.0.0.1:14621> help SET
+Set key to a value
+
+USAGE:
+    SET <KEY> [VALUE]
+
+ARGS:
+    <KEY>      
+    <VALUE>    Optional value to assign for this key
+
+OPTIONS:
+    -h, --help    Print help information
+
 ```
 
 ## Roadmap
