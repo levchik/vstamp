@@ -2,14 +2,33 @@ use bytes::Bytes;
 use std::borrow::BorrowMut;
 use std::io::Write;
 
-use clap::{arg, Command};
+use clap::{arg, value_parser, Command};
 use vstamp::client;
 use vstamp::client::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let addr = "127.0.0.1:14621";
-    let client_id = 666; // just random id
+    const DEFAULT_HOST: &str = "localhost";
+    const DEFAULT_PORT: &str = "14621";
+
+    let mut connection_host = DEFAULT_HOST.to_string();
+    let mut connection_port = DEFAULT_PORT.to_string();
+    let mut client_id: u128 = 666;
+
+    let matches = cli().get_matches();
+
+    if let Some(host) = matches.get_one::<String>("host") {
+        connection_host = host.clone();
+    }
+    if let Some(port) = matches.get_one::<String>("port") {
+        connection_port = port.clone();
+    }
+    let addr = format!("{}:{}", connection_host, connection_port);
+
+    if let Some(id) = matches.get_one::<u128>("id") {
+        client_id = *id;
+    }
+
     let mut client = client::connect(&addr, client_id).await;
     if client.is_err() {
         write!(std::io::stdout(), "{}\r\n", client.unwrap_err().to_string())
@@ -26,6 +45,7 @@ async fn main() -> Result<(), String> {
         }
 
         match respond(line, client.as_mut().unwrap()).await {
+            // match respond(line).await {
             Ok(quit) => {
                 if quit {
                     break;
@@ -44,15 +64,11 @@ async fn main() -> Result<(), String> {
 
 async fn respond(line: &str, client: &mut Client) -> Result<bool, String> {
     let args = shlex::split(line).ok_or("error: Invalid quoting")?;
-    let matches = cli()
+    let matches = repl()
         .try_get_matches_from(&args)
         .map_err(|e| e.to_string())?;
+
     match matches.subcommand() {
-        Some(("PING", _matches)) => {
-            write!(std::io::stdout(), "PONG\r\n")
-                .map_err(|e| e.to_string())?;
-            std::io::stdout().flush().map_err(|e| e.to_string())?;
-        }
         Some(("QUIT", _matches)) => {
             write!(std::io::stdout(), "Bye...\r\n")
                 .map_err(|e| e.to_string())?;
@@ -83,30 +99,47 @@ async fn respond(line: &str, client: &mut Client) -> Result<bool, String> {
 }
 
 fn cli() -> Command<'static> {
-    // strip out usage
+    Command::new("vstamp")
+        .about("A CLI for interacting with cluster of vstamp nodes.")
+        .subcommand_required(false)
+        .arg_required_else_help(false)
+        .arg(
+            arg!(
+                -h --host <HOST> "Sets a custom host to connect to"
+            )
+            .required(false),
+        )
+        .arg(
+            arg!(
+                -p --port <PORT> "Sets a custom port to connect to"
+            )
+            .required(false),
+        )
+        .arg(
+            arg!(
+                --id <ID> "Sets a custom id, used for identifying the client"
+            )
+            .required(false)
+            .value_parser(value_parser!(u128)),
+        )
+}
+
+fn repl() -> Command<'static> {
     const PARSER_TEMPLATE: &str = "\
         {all-args}
     ";
-    // strip out name/version
     const APPLET_TEMPLATE: &str = "\
         {about-with-newline}\n\
         {usage-heading}\n    {usage}\n\
         \n\
         {all-args}{after-help}\
     ";
-
-    Command::new("repl")
+    Command::new("REPL")
         .multicall(true)
         .arg_required_else_help(true)
         .subcommand_required(true)
         .subcommand_value_name("Command")
         .subcommand_help_heading("Available commands")
-        .help_template(PARSER_TEMPLATE)
-        .subcommand(
-            Command::new("PING")
-                .about("Get a response")
-                .help_template(APPLET_TEMPLATE),
-        )
         .subcommand(
             Command::new("QUIT")
                 .alias("exit")

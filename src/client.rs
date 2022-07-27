@@ -127,7 +127,10 @@ impl Client {
     }
 
     /// Sends PREPARE command doesn't wait for response.
-    pub async fn prepare_send_only(&mut self, command: Prepare) -> crate::Result<()> {
+    pub async fn prepare_send_only(
+        &mut self,
+        command: Prepare,
+    ) -> crate::Result<()> {
         let frame = command.into_frame();
 
         debug!(request = ?frame);
