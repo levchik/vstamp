@@ -38,7 +38,7 @@ async fn main() -> Result<(), String> {
     }
 
     loop {
-        let line = readline()?;
+        let line = readline(&addr)?;
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -156,8 +156,8 @@ fn repl() -> Command<'static> {
         )
 }
 
-fn readline() -> Result<String, String> {
-    write!(std::io::stdout(), "127.0.0.1:14621> ")
+fn readline(addr: &String) -> Result<String, String> {
+    write!(std::io::stdout(), "{}> ", addr)
         .map_err(|e| e.to_string())?;
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     let mut buffer = String::new();
