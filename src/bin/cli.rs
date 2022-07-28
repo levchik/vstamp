@@ -91,6 +91,38 @@ async fn respond(line: &str, client: &mut Client) -> Result<bool, String> {
                 .map_err(|e| e.to_string())?;
             std::io::stdout().flush().map_err(|e| e.to_string())?;
         }
+        Some(("GET", m)) => {
+            let k = m
+                .value_of("KEY")
+                .ok_or("error: Missing key\r\n")?
+                .to_string();
+            // TODO: handle connection reset by server
+            let reply = client.get(Bytes::from(k)).await.unwrap();
+            let response = std::str::from_utf8(&*reply.response).unwrap();
+            write!(std::io::stdout(), "{}\r\n", response)
+                .map_err(|e| e.to_string())?;
+            std::io::stdout().flush().map_err(|e| e.to_string())?;
+        }
+        Some(("DEL", m)) => {
+            let k = m
+                .value_of("KEY")
+                .ok_or("error: Missing key\r\n")?
+                .to_string();
+            // TODO: handle connection reset by server
+            let reply = client.delete(Bytes::from(k)).await.unwrap();
+            let response = std::str::from_utf8(&*reply.response).unwrap();
+            write!(std::io::stdout(), "{}\r\n", response)
+                .map_err(|e| e.to_string())?;
+            std::io::stdout().flush().map_err(|e| e.to_string())?;
+        }
+        Some(("SIZE", m)) => {
+            // TODO: handle connection reset by server
+            let reply = client.get_size().await.unwrap();
+            let response = std::str::from_utf8(&*reply.response).unwrap();
+            write!(std::io::stdout(), "{}\r\n", response)
+                .map_err(|e| e.to_string())?;
+            std::io::stdout().flush().map_err(|e| e.to_string())?;
+        }
         Some((name, _matches)) => unimplemented!("{}", name),
         None => unreachable!("subcommand required"),
     }
@@ -152,6 +184,26 @@ fn repl() -> Command<'static> {
                 .arg(arg!([VALUE] "Optional value to assign for this key"))
                 .alias("s")
                 .about("Set key to a value")
+                .help_template(APPLET_TEMPLATE),
+        )
+        .subcommand(
+            Command::new("GET")
+                .arg(arg!(<KEY>))
+                .alias("g")
+                .about("Get key's value")
+                .help_template(APPLET_TEMPLATE),
+        )
+        .subcommand(
+            Command::new("DEL")
+                .arg(arg!(<KEY>))
+                .alias("d")
+                .about("Delete key")
+                .help_template(APPLET_TEMPLATE),
+        )
+        .subcommand(
+            Command::new("SIZE")
+                .alias("z")
+                .about("Get current size of a database")
                 .help_template(APPLET_TEMPLATE),
         )
 }

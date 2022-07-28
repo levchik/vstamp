@@ -2,6 +2,14 @@ use bytes::Bytes;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+pub struct SizeCmd;
+
+impl SizeCmd {
+    pub fn into_bytes(self) -> Bytes {
+        Bytes::from_static(b"SIZE")
+    }
+}
+
 pub struct SetCmd {
     pub(crate) key: Bytes,
     pub(crate) value: Bytes,
@@ -18,11 +26,29 @@ impl SetCmd {
 }
 
 pub struct GetCmd {
-    key: Bytes,
+    pub(crate) key: Bytes,
+}
+
+impl GetCmd {
+    pub fn into_bytes(self) -> Bytes {
+        Bytes::from(format!(
+            "G {}",
+            std::str::from_utf8(&*self.key).unwrap()
+        ))
+    }
 }
 
 pub struct DeleteCmd {
-    key: Bytes,
+    pub(crate) key: Bytes,
+}
+
+impl DeleteCmd {
+    pub fn into_bytes(self) -> Bytes {
+        Bytes::from(format!(
+            "D {}",
+            std::str::from_utf8(&*self.key).unwrap()
+        ))
+    }
 }
 
 /// A record in key-value database, any key can have or not have a value.
@@ -43,6 +69,9 @@ pub struct KVApp {
     /// This is size of all data in database, calculated after each operation
     size: usize,
 }
+
+/// Const used to define absence of key in database.
+const NIL_VALUE: &'static [u8] = b"nil";
 
 impl KVApp {
     /// Returns a new key-value database
@@ -88,16 +117,19 @@ impl KVApp {
                 let cmd = self.parse_get(parts);
                 match self.get(cmd.key) {
                     Some(entry) => match entry.value.as_ref() {
-                        Some(value) => Bytes::from(value.clone()),
+                        Some(value) => value.clone(),
                         None => Bytes::new(),
                     },
-                    None => Bytes::new(),
+                    None => Bytes::from(NIL_VALUE),
                 }
             }
             "D" => {
                 let cmd = self.parse_delete(parts);
                 self.delete(cmd.key);
                 Bytes::new()
+            }
+            "SIZE" => {
+                Bytes::from(self.size.to_string())
             }
             _ => unimplemented!(),
         }
@@ -189,21 +221,12 @@ impl KVApp {
 
     /// Removes a key from database, updates size of the database
     pub fn delete(&mut self, key: Bytes) {
-        let entry = KVEntry {
-            key: key.to_owned(),
-            value: None,
-        };
-        match self.get_index(key.clone()) {
-            Ok(idx) => {
-                if let Some(value) = self.data[idx].value.as_ref() {
-                    self.size -= value.len();
-                }
-                self.data[idx] = entry;
+        if let Ok(idx) = self.get_index(key.clone()) {
+            if let Some(value) = self.data[idx].value.as_ref() {
+                self.size -= value.len();
             }
-            Err(idx) => {
-                self.size += key.len() + 16;
-                self.data.insert(idx, entry);
-            }
+            self.size -= key.len();
+            self.data.remove(idx);
         }
     }
 
