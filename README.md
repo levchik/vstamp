@@ -66,8 +66,26 @@ When you run binary, you'll drop into a REPL. There you can issue commands to kv
 
 Note that you need a running cluster up and running before you can use the CLI.
 
+```shell
+$ ./target/debug/vstamp-cli
+
+vstamp 
+A CLI for interacting with cluster of vstamp nodes.
+
+USAGE:
+    vstamp-cli [OPTIONS]
+
+OPTIONS:
+    -h, --host <HOST>    Sets a custom host to connect to
+        --help           Print help information
+        --id <ID>        Sets a custom id, used for identifying the client
+    -p, --port <PORT>    Sets a custom port to connect to
+
+```
+
+Use arguments for custom host/port & client-id:
 ```sh
-./target/debug/vstamp-cli
+$ ./target/debug/vstamp-cli --host 127.0.0.1 --port 14621 --id 12345
 
 127.0.0.1:14621> SET mykey myvalue
 myvalue
@@ -78,24 +96,17 @@ You can type help to see available commands and info about how to use them:
 
 ```sh
 127.0.0.1:14621> help
+ 
+USAGE:
+    <Command>
+
 Available commands:
-    PING    Get a response
+    DEL     Delete key
+    GET     Get key's value
     QUIT    Quit the REPL
     SET     Set key to a value
+    SIZE    Get current size of a database
     help    Print this message or the help of the given subcommand(s)
-    
-127.0.0.1:14621> help SET
-Set key to a value
-
-USAGE:
-    SET <KEY> [VALUE]
-
-ARGS:
-    <KEY>      
-    <VALUE>    Optional value to assign for this key
-
-OPTIONS:
-    -h, --help    Print help information
 
 ```
 
