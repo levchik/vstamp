@@ -21,7 +21,7 @@ cargo build --bin vstamp-server
 
 Since our integration tests run actual servers, they occupy real ports.
 
-They will clush if run in parallel, so you should run them in sequence for now.
+They will clash if run in parallel, so you should run them in sequence for now.
 
 ```sh
 cargo test -- --test-threads=1
@@ -118,7 +118,7 @@ Available commands:
 - [x] Ability to run servers and send request to them
 - [x] Basic tests that show operations are applied correctly to KV store
 - [x] Use parking_lot::Mutex as a faster alternative to std::sync::Mutex
-- [ ] Ability to run integration tests to them in parallel
+- [ ] Ability to run integration tests in parallel
 - [ ] Design & implement API for checking replicas state
 - [ ] Use some crate for Errors (currently they are very clunky)
 - [ ] (paper) View change protocol
