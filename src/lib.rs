@@ -12,6 +12,7 @@ mod shutdown;
 use shutdown::Shutdown;
 mod app;
 pub use app::KVApp;
+pub use app::NIL_VALUE;
 mod manager;
 pub mod server;
 

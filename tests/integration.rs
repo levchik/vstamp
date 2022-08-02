@@ -6,7 +6,7 @@ use tokio::signal;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tracing::debug;
-use vstamp::{client, server, KVApp, ReplicaConfig};
+use vstamp::{client, server, KVApp, ReplicaConfig, NIL_VALUE};
 
 static TRACING: Lazy<()> = Lazy::new(|| {
     let subscriber = tracing_subscriber::fmt()
@@ -62,38 +62,38 @@ async fn spawn_servers(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn server_saves_app_state_between_client_calls() {
+async fn primary_server_saves_app_state_between_client_calls() {
     let (servers, replicas_addresses) = spawn_servers(3, 1).await;
     let addr = replicas_addresses[0].clone();
     let client_id = 777; // just random id for tests
     let mut client = client::connect(&addr, client_id).await.unwrap();
 
     // Insert value in DB
-    let set_op = Bytes::from_static("S KEY VALUE".as_ref());
-    let val = client.request(set_op.clone()).await.unwrap();
+    let val = client
+        .set(Bytes::from("KEY"), Bytes::from("VALUE"))
+        .await
+        .unwrap();
     assert_eq!(val.view_number, 0);
     assert_eq!(val.request_id, 1);
-    assert_eq!(val.response, Bytes::from_static("VALUE".as_ref()));
+    assert_eq!(val.response, Bytes::from("VALUE"));
 
     // Get stored value from DB
-    let get_op = Bytes::from_static("G KEY".as_ref());
-    let val = client.request(get_op.clone()).await.unwrap();
+    let val = client.get(Bytes::from("KEY")).await.unwrap();
     assert_eq!(val.view_number, 0);
     assert_eq!(val.request_id, 2);
-    assert_eq!(val.response, Bytes::from_static("VALUE".as_ref()));
+    assert_eq!(val.response, Bytes::from("VALUE"));
 
     // Delete stored key from DB
-    let delete_op = Bytes::from_static("D KEY".as_ref());
-    let val = client.request(delete_op.clone()).await.unwrap();
+    let val = client.delete(Bytes::from("KEY")).await.unwrap();
     assert_eq!(val.view_number, 0);
     assert_eq!(val.request_id, 3);
-    assert_eq!(val.response, Bytes::from_static("".as_ref()));
+    assert_eq!(val.response, Bytes::from(""));
 
     // Try to get stored key from DB
-    let val = client.request(get_op.clone()).await.unwrap();
+    let val = client.get(Bytes::from("KEY")).await.unwrap();
     assert_eq!(val.view_number, 0);
     assert_eq!(val.request_id, 4);
-    assert_eq!(val.response, Bytes::from_static("".as_ref()));
+    assert_eq!(val.response, Bytes::from(NIL_VALUE));
 
     // Stop all servers
     for s in servers {

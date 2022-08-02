@@ -31,10 +31,7 @@ pub struct GetCmd {
 
 impl GetCmd {
     pub fn into_bytes(self) -> Bytes {
-        Bytes::from(format!(
-            "G {}",
-            std::str::from_utf8(&*self.key).unwrap()
-        ))
+        Bytes::from(format!("G {}", std::str::from_utf8(&*self.key).unwrap()))
     }
 }
 
@@ -44,10 +41,7 @@ pub struct DeleteCmd {
 
 impl DeleteCmd {
     pub fn into_bytes(self) -> Bytes {
-        Bytes::from(format!(
-            "D {}",
-            std::str::from_utf8(&*self.key).unwrap()
-        ))
+        Bytes::from(format!("D {}", std::str::from_utf8(&*self.key).unwrap()))
     }
 }
 
@@ -71,7 +65,7 @@ pub struct KVApp {
 }
 
 /// Const used to define absence of key in database.
-const NIL_VALUE: &'static [u8] = b"nil";
+pub const NIL_VALUE: &'static [u8] = b"nil";
 
 impl KVApp {
     /// Returns a new key-value database
@@ -128,9 +122,7 @@ impl KVApp {
                 self.delete(cmd.key);
                 Bytes::new()
             }
-            "SIZE" => {
-                Bytes::from(self.size.to_string())
-            }
+            "SIZE" => Bytes::from(self.size.to_string()),
             _ => unimplemented!(),
         }
     }

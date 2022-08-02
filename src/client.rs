@@ -127,10 +127,7 @@ impl Client {
     }
 
     /// Sends GET command, waits for Reply in response.
-    pub async fn get(
-        &mut self,
-        key: Bytes
-    ) -> crate::Result<Reply> {
+    pub async fn get(&mut self, key: Bytes) -> crate::Result<Reply> {
         let command = GetCmd { key };
         let command_bytes = command.into_bytes();
 
@@ -138,19 +135,14 @@ impl Client {
     }
 
     /// Sends DEL command, waits for Reply in response.
-    pub async fn delete(
-        &mut self,
-        key: Bytes
-    ) -> crate::Result<Reply> {
+    pub async fn delete(&mut self, key: Bytes) -> crate::Result<Reply> {
         let command = DeleteCmd { key };
         let command_bytes = command.into_bytes();
 
         self.request(command_bytes).await
     }
 
-    pub async fn get_size(
-        &mut self
-    ) -> crate::Result<Reply> {
+    pub async fn get_size(&mut self) -> crate::Result<Reply> {
         let command = SizeCmd {};
         let command_bytes = command.into_bytes();
 

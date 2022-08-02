@@ -209,8 +209,7 @@ fn repl() -> Command<'static> {
 }
 
 fn readline(addr: &String) -> Result<String, String> {
-    write!(std::io::stdout(), "{}> ", addr)
-        .map_err(|e| e.to_string())?;
+    write!(std::io::stdout(), "{}> ", addr).map_err(|e| e.to_string())?;
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     let mut buffer = String::new();
     std::io::stdin()
